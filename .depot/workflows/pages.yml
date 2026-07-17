@@ -1,0 +1,71 @@
+# Depot CI workflow (https://depot.dev/docs/ci/overview).
+# Source: migrated from .github/workflows/pages.yml, then adapted for Depot CI.
+#
+# Why this doesn't use actions/deploy-pages: Depot CI does not support the
+# `environment:` job key or the `pages: write` permission, and its id-token is a
+# Depot OIDC token (identity.depot.dev), not the GitHub Actions runtime token
+# that actions/deploy-pages requires (https://depot.dev/docs/ci/compatibility).
+# Instead this job publishes the validated site/ directory as a single orphan
+# commit force-pushed to the `gh-pages` branch. The one GitHub-side requirement:
+# Settings -> Pages -> Build and deployment -> Source: "Deploy from a branch",
+# branch `gh-pages`, folder `/ (root)`. GitHub then serves the branch itself —
+# no GitHub Actions workflow is involved. See docs/releasing.md.
+
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".depot/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Validate and publish site to gh-pages
+    # Depot CI sandbox label (https://depot.dev/docs/ci/overview#depot-ci-sandboxes).
+    runs-on: depot-ubuntu-24.04
+    permissions:
+      contents: write # push the gh-pages branch
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Validate site payload
+        run: |
+          set -eu
+          test -f site/index.html
+          sh -n site/install.sh
+          test -f site/install.ps1
+          # The install command advertised everywhere must match the Pages layout.
+          grep -q 'davis7dotsh.github.io/open-yt-cli/install.sh' README.md
+
+      - name: Publish site/ as orphan commit on gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          workdir="$(mktemp -d)"
+          cp -R site/. "$workdir"/
+          # Serve files verbatim (no Jekyll processing).
+          touch "$workdir/.nojekyll"
+          cd "$workdir"
+          git init -q -b gh-pages
+          git config user.name "depot-ci[bot]"
+          git config user.email "depot-ci[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Deploy site from ${GITHUB_SHA}"
+          # Authenticate via header (never embed the token in the remote URL,
+          # which git can echo in error messages).
+          auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+          git -c http.extraheader="AUTHORIZATION: basic ${auth}" \
+            push -q --force "https://github.com/${GITHUB_REPOSITORY}.git" gh-pages

@@ -1,0 +1,120 @@
+# Depot CI workflow (https://depot.dev/docs/ci/overview).
+# Source: migrated from .github/workflows/ci.yml (now removed — Depot CI is the
+# only CI system for this repo; see docs/releasing.md).
+
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    name: Format, vet, test, build
+    # Depot CI sandbox label (https://depot.dev/docs/ci/overview#depot-ci-sandboxes).
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Verify formatting (gofmt, no rewrite)
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt required for:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+      - name: Verify go.mod/go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - name: go vet
+        run: go vet ./...
+      - name: Tests (race detector)
+        run: go test -race ./...
+      - name: Build
+        run: go build ./...
+  cross-build:
+    name: Cross-compile release targets
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build every release platform
+        run: |
+          set -eu
+          for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            echo "== $platform =="
+            CGO_ENABLED=0 GOOS="${platform%/*}" GOARCH="${platform#*/}" \
+              go build -trimpath -o /dev/null ./cmd/oytc
+          done
+  scripts-and-site:
+    name: Validate installer, scripts, skill, site
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Shell syntax
+        run: |
+          sh -n site/install.sh
+          sh -n scripts/package.sh
+          sh -n dev
+      - name: shellcheck
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q shellcheck
+          shellcheck site/install.sh scripts/package.sh
+      - name: Skill structure
+        run: |
+          python3 - <<'EOF'
+          import re, sys
+          text = open('skills/oytc/SKILL.md').read()
+          m = re.match(r'^---\n(.*?)\n---\n', text, re.S)
+          assert m, 'SKILL.md missing YAML frontmatter'
+          fm = m.group(1)
+          fields = dict(line.split(':', 1) for line in fm.splitlines() if ':' in line)
+          assert fields.get('name', '').strip() == 'oytc', 'skill name must be oytc'
+          desc = fields.get('description', '').strip()
+          assert desc and len(desc) < 1024, 'description missing or too long'
+          print('SKILL.md OK')
+          EOF
+      - name: Asset naming consistency (release <-> installer <-> updater)
+        run: |
+          set -eu
+          # The canonical pattern oytc_<tag>_<os>_<arch>.<ext> must appear in all three places.
+          grep -q 'oytc_%s_%s_%s' internal/update/update.go
+          grep -q 'oytc_${VERSION}_${goos}_${goarch}' scripts/package.sh
+          grep -q 'oytc_${version}_${goos}_${goarch}' site/install.sh
+          grep -q 'checksums.txt' internal/update/update.go
+          grep -q 'checksums.txt' scripts/package.sh
+          grep -q 'checksums.txt' site/install.sh
+          echo "asset naming consistent"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Installer end-to-end against local artifacts
+        run: |
+          set -eu
+          ./scripts/package.sh v0.0.0-ci dist-ci
+          mkdir -p serve/v0.0.0-ci
+          cp dist-ci/oytc_v0.0.0-ci_linux_amd64.tar.gz dist-ci/checksums.txt serve/v0.0.0-ci/
+          python3 -m http.server 8931 --directory serve >/dev/null 2>&1 &
+          server=$!
+          trap 'kill "$server"' EXIT
+          sleep 1
+          HOME="$PWD/fake-home" OYTC_VERSION=v0.0.0-ci \
+            OYTC_DOWNLOAD_BASE=http://127.0.0.1:8931 sh site/install.sh
+          "$PWD/fake-home/.local/bin/oytc" version
+          "$PWD/fake-home/.local/bin/oytc_update" --help >/dev/null

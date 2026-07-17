@@ -1,0 +1,80 @@
+# Depot CI workflow (https://depot.dev/docs/ci/overview).
+# Source: migrated from .github/workflows/release.yml (now removed — Depot CI is
+# the only CI system for this repo; see docs/releasing.md). Depot CI issues
+# GITHUB_TOKEN via the Depot Code Access GitHub App; `contents: write` below is
+# a supported Depot CI permission and is all the release upload needs.
+
+name: Release
+# Publishing is tag-driven: pushing a semantic version tag (v*) builds, tests,
+# packages, and creates the GitHub Release. workflow_dispatch allows re-running
+# for an existing tag (for example if asset upload failed). Nothing publishes
+# from ordinary pushes to main. See docs/releasing.md.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing v* tag to (re)publish"
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    name: Build, package, publish
+    # Depot CI sandbox label (https://depot.dev/docs/ci/overview#depot-ci-sandboxes).
+    runs-on: depot-ubuntu-24.04
+    permissions:
+      contents: write # create the release and upload assets
+    steps:
+      - name: Resolve tag
+        id: tag
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          if [ -n "${DISPATCH_TAG:-}" ]; then
+            tag="$DISPATCH_TAG"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          case "$tag" in
+            v[0-9]*) ;;
+            *) echo "error: '$tag' is not a v-prefixed semantic version tag" >&2; exit 1 ;;
+          esac
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Tests (race detector)
+        run: go test -race ./...
+      - name: Package all platforms
+        run: ./scripts/package.sh "${{ steps.tag.outputs.tag }}" dist
+      - name: Smoke-test a packaged binary
+        run: |
+          set -eu
+          tar -xzf "dist/oytc_${{ steps.tag.outputs.tag }}_linux_amd64.tar.gz" -C /tmp oytc
+          /tmp/oytc version
+          /tmp/oytc version --format json | grep -q '"version": "${{ steps.tag.outputs.tag }}"'
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: oytc ${{ steps.tag.outputs.tag }}
+          draft: false
+          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/oytc_${{ steps.tag.outputs.tag }}_*.tar.gz
+            dist/oytc_${{ steps.tag.outputs.tag }}_*.zip
+            dist/checksums.txt

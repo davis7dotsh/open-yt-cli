@@ -53,8 +53,9 @@ func exitCode(err error) int {
 	}
 	var apiErr *youtube.APIError
 	if errors.As(err, &apiErr) {
-		reasons := strings.Join(apiErr.Reasons, ",")
-		if strings.Contains(reasons, "keyInvalid") || strings.Contains(reasons, "accessNotConfigured") || apiErr.HTTPStatus == 401 {
+		reasons := strings.ToLower(strings.Join(apiErr.Reasons, ","))
+		normalizedReasons := strings.NewReplacer("_", "", "-", "").Replace(reasons)
+		if strings.Contains(normalizedReasons, "keyinvalid") || strings.Contains(normalizedReasons, "apikeyinvalid") || strings.Contains(normalizedReasons, "accessnotconfigured") || apiErr.HTTPStatus == 401 {
 			return 3
 		}
 		if apiErr.HTTPStatus == 404 {

@@ -1,4 +1,4 @@
-// Package youtube provides a small, API-key-only YouTube REST client.
+// Package youtube provides a small read-only YouTube REST client.
 package youtube
 
 import (
@@ -18,12 +18,15 @@ import (
 
 const DefaultBaseURL = "https://www.googleapis.com/youtube/v3"
 
+type TokenSource func(context.Context, bool) (string, error)
+
 type Client struct {
-	BaseURL    string
-	APIKey     string
-	HTTPClient *http.Client
-	MaxRetries int
-	Sleep      func(context.Context, time.Duration) error
+	BaseURL     string
+	APIKey      string
+	TokenSource TokenSource
+	HTTPClient  *http.Client
+	MaxRetries  int
+	Sleep       func(context.Context, time.Duration) error
 }
 
 type Response struct {
@@ -77,8 +80,9 @@ func (c *Client) GetJSON(ctx context.Context, resource string, params url.Values
 		target += "?" + encoded
 	}
 
-	var lastErr error
-	for attempt := 0; attempt <= c.MaxRetries; attempt++ {
+	transientAttempt := 0
+	authRetried := false
+	for {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
 			return err
@@ -86,20 +90,31 @@ func (c *Client) GetJSON(ctx context.Context, resource string, params url.Values
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("User-Agent", "oytc/0.1")
 		if authenticate {
-			if strings.TrimSpace(c.APIKey) == "" {
+			switch {
+			case c.TokenSource != nil:
+				token, err := c.TokenSource(ctx, false)
+				if err != nil {
+					return err
+				}
+				if strings.TrimSpace(token) == "" {
+					return ErrMissingOAuth
+				}
+				req.Header.Set("Authorization", "Bearer "+token)
+			case strings.TrimSpace(c.APIKey) != "":
+				req.Header.Set("X-Goog-Api-Key", c.APIKey)
+			default:
 				return ErrMissingKey
 			}
-			req.Header.Set("X-Goog-Api-Key", c.APIKey)
 		}
 		resp, err := c.httpClient().Do(req)
 		if err != nil {
-			lastErr = err
-			if !retryableTransport(err) || attempt == c.MaxRetries {
+			if !retryableTransport(err) || transientAttempt >= c.MaxRetries {
 				return fmt.Errorf("request YouTube API: %w", err)
 			}
-			if err := c.wait(ctx, backoff(attempt, "")); err != nil {
+			if err := c.wait(ctx, backoff(transientAttempt, "")); err != nil {
 				return err
 			}
+			transientAttempt++
 			continue
 		}
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
@@ -108,12 +123,19 @@ func (c *Client) GetJSON(ctx context.Context, resource string, params url.Values
 			return fmt.Errorf("read YouTube API response: %w", readErr)
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			apiErr := parseAPIError(resp.StatusCode, body)
-			lastErr = apiErr
-			if isTransientStatus(resp.StatusCode) && attempt < c.MaxRetries {
-				if err := c.wait(ctx, backoff(attempt, resp.Header.Get("Retry-After"))); err != nil {
+			if authenticate && c.TokenSource != nil && resp.StatusCode == http.StatusUnauthorized && !authRetried {
+				if _, err := c.TokenSource(ctx, true); err != nil {
 					return err
 				}
+				authRetried = true
+				continue
+			}
+			apiErr := parseAPIError(resp.StatusCode, body)
+			if isTransientStatus(resp.StatusCode) && transientAttempt < c.MaxRetries {
+				if err := c.wait(ctx, backoff(transientAttempt, resp.Header.Get("Retry-After"))); err != nil {
+					return err
+				}
+				transientAttempt++
 				continue
 			}
 			return apiErr
@@ -125,10 +147,12 @@ func (c *Client) GetJSON(ctx context.Context, resource string, params url.Values
 		}
 		return nil
 	}
-	return lastErr
 }
 
-var ErrMissingKey = errors.New("no API key configured; run 'oytc login' or set OYTC_API_KEY")
+var (
+	ErrMissingKey   = errors.New("no API key configured; run 'oytc login' or set OYTC_API_KEY")
+	ErrMissingOAuth = errors.New("no OAuth credentials configured; run 'oytc login --oauth'")
+)
 
 func parseAPIError(status int, body []byte) *APIError {
 	var envelope struct {

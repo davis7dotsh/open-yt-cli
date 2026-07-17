@@ -1,4 +1,4 @@
-// Package config manages oytc's API-key configuration.
+// Package config manages oytc's API-key and OAuth configuration.
 package config
 
 import (
@@ -13,15 +13,30 @@ import (
 	"strings"
 )
 
-const envKey = "OYTC_API_KEY"
+const (
+	envKey               = "OYTC_API_KEY"
+	envOAuthClientID     = "OYTC_OAUTH_CLIENT_ID"
+	envOAuthClientSecret = "OYTC_OAUTH_CLIENT_SECRET"
+)
 
 type File struct {
-	APIKey string `json:"api_key"`
+	APIKey string            `json:"api_key,omitempty"`
+	OAuth  *OAuthCredentials `json:"oauth,omitempty"`
+}
+
+type OAuthCredentials struct {
+	ClientID     string   `json:"client_id"`
+	ClientSecret string   `json:"client_secret"`
+	AccessToken  string   `json:"access_token"`
+	RefreshToken string   `json:"refresh_token"`
+	Expiry       string   `json:"expiry"`
+	Scopes       []string `json:"scopes"`
 }
 
 type Credentials struct {
 	Key    string
 	Source string
+	OAuth  *OAuthCredentials
 	Path   string
 }
 
@@ -73,25 +88,30 @@ func Load() (Credentials, error) {
 	if err != nil {
 		return Credentials{}, err
 	}
-	if key := strings.TrimSpace(os.Getenv(envKey)); key != "" {
-		return Credentials{Key: key, Source: envKey, Path: path}, nil
-	}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return Credentials{Path: path}, nil
-	}
+	file, exists, err := loadFile(path)
 	if err != nil {
-		return Credentials{Path: path}, fmt.Errorf("read credentials: %w", err)
+		return Credentials{Path: path}, err
 	}
-	var file File
-	if err := json.Unmarshal(data, &file); err != nil {
-		return Credentials{Path: path}, fmt.Errorf("parse credentials: %w", err)
+	credentials := Credentials{Path: path}
+	if exists {
+		credentials.Key = strings.TrimSpace(file.APIKey)
+		credentials.OAuth = cloneOAuth(file.OAuth)
+		if credentials.Key != "" {
+			credentials.Source = "auth.json"
+		}
 	}
-	file.APIKey = strings.TrimSpace(file.APIKey)
-	if file.APIKey == "" {
-		return Credentials{Path: path}, errors.New("credential file contains an empty API key")
+	if key := strings.TrimSpace(os.Getenv(envKey)); key != "" {
+		credentials.Key = key
+		credentials.Source = envKey
 	}
-	return Credentials{Key: file.APIKey, Source: "auth.json", Path: path}, nil
+	return credentials, nil
+}
+
+// OAuthBootstrap returns environment credentials used only to bootstrap `login --oauth`.
+// Each variable independently avoids its corresponding prompt, analogous to OYTC_API_KEY's
+// environment-first behavior. Authorized tokens are still loaded from auth.json.
+func OAuthBootstrap() (clientID, clientSecret string) {
+	return strings.TrimSpace(os.Getenv(envOAuthClientID)), strings.TrimSpace(os.Getenv(envOAuthClientSecret))
 }
 
 func Save(key string) (string, error) {
@@ -99,16 +119,100 @@ func Save(key string) (string, error) {
 	if key == "" {
 		return "", errors.New("API key cannot be empty")
 	}
+	return updateFile(func(file *File) { file.APIKey = key })
+}
+
+func SaveOAuth(credentials OAuthCredentials) (string, error) {
+	credentials.ClientID = strings.TrimSpace(credentials.ClientID)
+	credentials.ClientSecret = strings.TrimSpace(credentials.ClientSecret)
+	credentials.AccessToken = strings.TrimSpace(credentials.AccessToken)
+	credentials.RefreshToken = strings.TrimSpace(credentials.RefreshToken)
+	credentials.Expiry = strings.TrimSpace(credentials.Expiry)
+	if credentials.ClientID == "" || credentials.ClientSecret == "" {
+		return "", errors.New("OAuth client ID and client secret cannot be empty")
+	}
+	if credentials.AccessToken == "" && credentials.RefreshToken == "" {
+		return "", errors.New("OAuth access token or refresh token is required")
+	}
+	return updateFile(func(file *File) { file.OAuth = cloneOAuth(&credentials) })
+}
+
+func ClearAPIKey() (string, error) {
+	return updateFile(func(file *File) { file.APIKey = "" })
+}
+
+func ClearOAuth() (string, error) {
+	return updateFile(func(file *File) { file.OAuth = nil })
+}
+
+func Remove() (string, bool, error) {
+	path, err := Path()
+	if err != nil {
+		return "", false, err
+	}
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return path, false, nil
+		}
+		return path, false, fmt.Errorf("remove credentials: %w", err)
+	}
+	return path, true, nil
+}
+
+func Fingerprint(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(key))
+	return "sha256:" + hex.EncodeToString(sum[:])[:12]
+}
+
+func EnvKeySet() bool { return strings.TrimSpace(os.Getenv(envKey)) != "" }
+
+func EnvOAuthClientIDSet() bool {
+	return strings.TrimSpace(os.Getenv(envOAuthClientID)) != ""
+}
+
+func EnvOAuthClientSecretSet() bool {
+	return strings.TrimSpace(os.Getenv(envOAuthClientSecret)) != ""
+}
+
+func updateFile(update func(*File)) (string, error) {
 	path, err := Path()
 	if err != nil {
 		return "", err
 	}
+	file, _, err := loadFile(path)
+	if err != nil {
+		return "", err
+	}
+	update(&file)
+	return saveFile(path, file)
+}
+
+func loadFile(path string) (File, bool, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return File{}, false, nil
+	}
+	if err != nil {
+		return File{}, false, fmt.Errorf("read credentials: %w", err)
+	}
+	var file File
+	if err := json.Unmarshal(data, &file); err != nil {
+		return File{}, true, fmt.Errorf("parse credentials: %w", err)
+	}
+	return file, true, nil
+}
+
+func saveFile(path string, file File) (string, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create config directory: %w", err)
 	}
 	_ = os.Chmod(dir, 0o700)
-	data, err := json.MarshalIndent(File{APIKey: key}, "", "  ")
+	data, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return "", err
 	}
@@ -141,30 +245,14 @@ func Save(key string) (string, error) {
 	return path, nil
 }
 
-func Remove() (string, bool, error) {
-	path, err := Path()
-	if err != nil {
-		return "", false, err
+func cloneOAuth(credentials *OAuthCredentials) *OAuthCredentials {
+	if credentials == nil {
+		return nil
 	}
-	if err := os.Remove(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return path, false, nil
-		}
-		return path, false, fmt.Errorf("remove credentials: %w", err)
-	}
-	return path, true, nil
+	copy := *credentials
+	copy.Scopes = append([]string(nil), credentials.Scopes...)
+	return &copy
 }
-
-func Fingerprint(key string) string {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(key))
-	return "sha256:" + hex.EncodeToString(sum[:])[:12]
-}
-
-func EnvKeySet() bool { return strings.TrimSpace(os.Getenv(envKey)) != "" }
 
 func expandHome(path string) string {
 	if path == "~" || strings.HasPrefix(path, "~/") || strings.HasPrefix(path, `~\`) {

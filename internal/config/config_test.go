@@ -64,6 +64,51 @@ func TestSaveLoadRemoveAndModes(t *testing.T) {
 	}
 }
 
+func TestAPIKeyAndOAuthCoexistAndUpdateIndependently(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "")
+	if _, err := Save("api-secret"); err != nil {
+		t.Fatal(err)
+	}
+	oauth := OAuthCredentials{
+		ClientID: "desktop-id", ClientSecret: "client-secret", AccessToken: "access-secret",
+		RefreshToken: "refresh-secret", Expiry: "2026-02-01T12:00:00Z", Scopes: []string{"scope.one", "scope.two"},
+	}
+	if _, err := SaveOAuth(oauth); err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credentials.Key != "api-secret" || credentials.OAuth == nil || credentials.OAuth.ClientID != "desktop-id" || credentials.OAuth.RefreshToken != "refresh-secret" {
+		t.Fatalf("coexisting credentials: %#v", credentials)
+	}
+	if _, err := Save("replacement-key"); err != nil {
+		t.Fatal(err)
+	}
+	credentials, err = Load()
+	if err != nil || credentials.OAuth == nil || credentials.OAuth.AccessToken != "access-secret" {
+		t.Fatalf("API-key update clobbered OAuth: %#v, %v", credentials, err)
+	}
+	if _, err := ClearOAuth(); err != nil {
+		t.Fatal(err)
+	}
+	credentials, err = Load()
+	if err != nil || credentials.Key != "replacement-key" || credentials.OAuth != nil {
+		t.Fatalf("OAuth clear clobbered API key: %#v, %v", credentials, err)
+	}
+}
+
+func TestOAuthBootstrapEnvironmentPrecedence(t *testing.T) {
+	t.Setenv("OYTC_OAUTH_CLIENT_ID", "environment-id")
+	t.Setenv("OYTC_OAUTH_CLIENT_SECRET", "environment-secret")
+	id, secret := OAuthBootstrap()
+	if id != "environment-id" || secret != "environment-secret" {
+		t.Fatalf("OAuthBootstrap() = %q, %q", id, secret)
+	}
+}
+
 func TestEnvironmentKeyHasPrecedence(t *testing.T) {
 	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
 	t.Setenv("OYTC_API_KEY", "environment-secret")

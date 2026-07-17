@@ -1,17 +1,19 @@
 ---
 name: oytc
-description: Query public YouTube data (search, videos, channels, playlists, comments, live chat) via the oytc CLI, which uses the YouTube Data API v3 with an API key. Use whenever a task needs public YouTube information — video/channel stats, search results, uploads, comment threads
+description: Query public YouTube data and an authorized channel's read-only analytics via the oytc CLI. Use for video/channel stats, searches, uploads, comments, live chat, watch time, traffic sources, and demographics.
 ---
 
-# oytc — public YouTube data CLI
+# oytc — read-only YouTube data and analytics CLI
 
-`oytc` reads public YouTube Data API v3 resources with an API key. It is read-only and
-cannot access anything private: if the task needs owner analytics (watch time, revenue,
-audience demographics), private playlists/subscriptions, moderation, or uploads, stop —
-those need OAuth and `oytc` deliberately does not implement it.
+`oytc` reads public YouTube Data API v3 resources with an API key and the authorized
+channel's YouTube Analytics with read-only OAuth. It never writes. Revenue/content-owner
+reports, private playlist/subscription access, moderation, uploads, and mutations remain
+unsupported.
 
-This skill assumes `oytc` is installed and a key is configured. Verify with
-`oytc status --check` (exit code 3 means no/invalid key; the user must run `oytc login`).
+This skill assumes `oytc` is installed. Public commands need `oytc login` (or
+`OYTC_API_KEY`); `analytics ...` needs `oytc login --oauth`. Verify both with
+`oytc status --check`. Exit code 3 means the indicated credential must be configured or
+reauthorized.
 
 ## Core usage pattern
 
@@ -28,6 +30,12 @@ oytc video stats VIDEO_ID_1 VIDEO_ID_2 --format json   # counters are JSON strin
 oytc playlist items PLAYLIST_ID --all --format jsonl
 oytc comment threads --video VIDEO_ID --order relevance --format jsonl
 oytc live-chat stream --video LIVE_VIDEO_ID --limit 100   # JSONL; REST polling fallback
+
+# OAuth-only owner analytics
+oytc analytics overview --by day --format json
+oytc analytics video VIDEO_ID --start 2026-01-01 --end 2026-01-31 --format json
+oytc analytics traffic-sources --format jsonl
+oytc analytics demographics --format json
 ```
 
 Pagination: `--all` follows pages, `--limit N` caps output, `--page-token` resumes.
@@ -39,8 +47,9 @@ Trim payloads with `--parts` and `--fields` when you only need specific properti
   before searching, prefer `channel uploads` / `playlist items` for enumeration.
 - Other list reads cost ~1 unit of a 10,000/day quota; exit code 5 = quota exhausted.
 - Exit codes: 0 ok, 2 usage, 3 credentials, 4 not found/forbidden, 5 quota, 6 transient.
-- Never print, log, or echo the API key; `oytc status` intentionally shows only a
-  fingerprint. Do not read the auth.json credential file.
+- Never print, log, or echo API keys, OAuth tokens, or the client secret. `oytc status`
+  intentionally shows only a key fingerprint plus OAuth client ID/scopes/expiry. Do not
+  read the `auth.json` credential file.
 - View/subscriber counters arrive as strings; keep them as strings to avoid precision loss.
 
 ## References

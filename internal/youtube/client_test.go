@@ -37,6 +37,47 @@ func TestGetUsesHeaderNotQueryForKey(t *testing.T) {
 	}
 }
 
+func TestBearerAuthenticationForcesOneRefreshAfter401(t *testing.T) {
+	var requests atomic.Int32
+	var forced atomic.Int32
+	var current atomic.Value
+	current.Store("stale-token")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		request := requests.Add(1)
+		if r.Header.Get("X-Goog-Api-Key") != "" {
+			t.Error("bearer request also sent API key")
+		}
+		if request == 1 {
+			if r.Header.Get("Authorization") != "Bearer stale-token" {
+				t.Errorf("first authorization = %q", r.Header.Get("Authorization"))
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"code":401,"message":"expired"}}`))
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer fresh-token" {
+			t.Errorf("second authorization = %q", r.Header.Get("Authorization"))
+		}
+		_, _ = w.Write([]byte(`{"items":[{"id":"ok"}]}`))
+	}))
+	defer server.Close()
+	client := testClient(server, "")
+	client.TokenSource = func(_ context.Context, force bool) (string, error) {
+		if force {
+			forced.Add(1)
+			current.Store("fresh-token")
+		}
+		return current.Load().(string), nil
+	}
+	response, err := client.Get(context.Background(), "videos", url.Values{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Items[0]["id"] != "ok" || requests.Load() != 2 || forced.Load() != 1 {
+		t.Fatalf("response/requests/forced = %#v/%d/%d", response, requests.Load(), forced.Load())
+	}
+}
+
 func TestGetWithoutAuthenticationSendsNoKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("X-Goog-Api-Key"); got != "" {

@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>oytc — public YouTube data from the command line</title>
-  <meta name="description" content="oytc is an API-key-only CLI for the public YouTube Data API v3. Search, channels, videos, playlists, comments, and live chat — read-only, no OAuth.">
+  <title>oytc — YouTube data and analytics from the command line</title>
+  <meta name="description" content="oytc is a read-only CLI for public YouTube data and your authorized channel analytics. API-key and OAuth 2.0 support, with no writes.">
   <style>
     :root {
       --bg: #0d1117;
@@ -90,15 +90,15 @@
 <body>
 <main>
   <h1><span class="accent">oytc</span> — open YouTube CLI</h1>
-  <p class="tagline">Read public YouTube data from your terminal. API key only, read-only, scriptable.</p>
+  <p class="tagline">Read public YouTube data and your channel analytics. Read-only and scriptable.</p>
 
-  <p><code>oytc</code> is a command-line client for the official <strong>YouTube Data API&nbsp;v3</strong>.
-  It covers search, channels, videos, playlists, comments, subscriptions, live chat, and more —
-  with stable JSON/JSONL/TSV output, pagination, and retries built in.</p>
+  <p><code>oytc</code> is a command-line client for the official <strong>YouTube Data API&nbsp;v3</strong>
+  and <strong>YouTube Analytics API</strong>. It covers search, channels, videos, playlists, comments,
+  live chat, and owner-authorized analytics — with stable JSON/JSONL/TSV output and retries.</p>
 
   <div class="note">
-    <strong>Public data only.</strong> oytc uses an API key, never OAuth. It cannot access private
-    account data such as watch time, revenue, or channel analytics, and it performs no writes.
+    <strong>Zero writes.</strong> API keys cover public data. Optional OAuth requests only read-only
+    YouTube and Analytics scopes for your own channel; uploads, moderation, and revenue are absent.
   </div>
 
   <h2>Install (macOS &amp; Linux)</h2>
@@ -120,7 +120,11 @@ oytc status --check
 # 4. Go
 oytc search "Go conference" --type video --limit 5
 oytc channel get @GoogleDevelopers
-oytc video stats dQw4w9WgXcQ --format json</code></pre>
+oytc video stats dQw4w9WgXcQ --format json
+
+# Optional owner analytics (see the OAuth setup guide)
+oytc login --oauth
+oytc analytics overview --by day</code></pre>
 
   <h2>Commands</h2>
   <table>
@@ -133,7 +137,8 @@ oytc video stats dQw4w9WgXcQ --format json</code></pre>
     <tr><td><code>subscription</code></td><td>Public channel subscriptions</td></tr>
     <tr><td><code>live-chat</code></td><td>Live chat (one page or continuous REST polling)</td></tr>
     <tr><td><code>category</code> / <code>language</code> / <code>region</code></td><td>YouTube metadata lists</td></tr>
-    <tr><td><code>login</code> / <code>status</code> / <code>logout</code></td><td>Manage the locally stored API key</td></tr>
+    <tr><td><code>analytics</code></td><td>OAuth-only overview, video, traffic, demographic, and raw reports</td></tr>
+    <tr><td><code>login</code> / <code>status</code> / <code>logout</code></td><td>Manage API-key and OAuth credentials</td></tr>
     <tr><td><code>skills install</code></td><td>Confirm and install the bundled agent skill</td></tr>
     <tr><td><code>version</code> / <code>update</code></td><td>Show build info; checksum-verified self-update</td></tr>
   </table>
@@ -142,12 +147,13 @@ oytc video stats dQw4w9WgXcQ --format json</code></pre>
     <li><a href="https://github.com/davis7dotsh/open-yt-cli">GitHub</a></li>
     <li><a href="https://github.com/davis7dotsh/open-yt-cli/blob/main/docs/commands.md">Command reference</a></li>
     <li><a href="https://github.com/davis7dotsh/open-yt-cli/blob/main/docs/google-api-key.md">API key setup guide</a></li>
+    <li><a href="https://github.com/davis7dotsh/open-yt-cli/blob/main/docs/oauth.md">OAuth analytics setup</a></li>
     <li><a href="https://github.com/davis7dotsh/open-yt-cli/releases">Releases</a></li>
   </ul>
 
   <footer>
-    <p>oytc is not affiliated with YouTube or Google. It only reads public data through the official
-    YouTube Data API v3 and stores your API key locally with restrictive file permissions.</p>
+    <p>oytc is not affiliated with YouTube or Google. It reads through official YouTube APIs and
+    stores API-key/OAuth credentials locally with restrictive file permissions.</p>
   </footer>
 </main>
 </body>

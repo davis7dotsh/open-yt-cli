@@ -26,13 +26,19 @@ type UsageError struct{ Message string }
 func (e *UsageError) Error() string { return e.Message }
 
 type App struct {
-	In          io.Reader
-	Out         io.Writer
-	Err         io.Writer
-	HTTPClient  *http.Client
-	BaseURL     string
-	ReadSecret  func() (string, error)
-	IsOutputTTY bool
+	In               io.Reader
+	Out              io.Writer
+	Err              io.Writer
+	HTTPClient       *http.Client
+	BaseURL          string
+	AnalyticsBaseURL string
+	OAuthAuthURL     string
+	OAuthTokenURL    string
+	OAuthRevokeURL   string
+	OpenBrowser      func(string) error
+	Now              func() time.Time
+	ReadSecret       func() (string, error)
+	IsOutputTTY      bool
 	// UpdaterFactory lets tests replace the self-updater's endpoints,
 	// HTTP client, and target executable.
 	UpdaterFactory func(*update.Updater) *update.Updater
@@ -61,7 +67,7 @@ type apiFlags struct {
 }
 
 func New() *App {
-	app := &App{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, BaseURL: youtube.DefaultBaseURL, timeout: 20 * time.Second}
+	app := &App{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, BaseURL: youtube.DefaultBaseURL, timeout: 20 * time.Second, Now: time.Now}
 	app.IsOutputTTY = term.IsTerminal(int(os.Stdout.Fd()))
 	app.ReadSecret = app.readSecret
 	return app
@@ -70,11 +76,11 @@ func New() *App {
 func (a *App) Root() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "oytc",
-		Short:         "Read public YouTube data from the command line",
+		Short:         "Read YouTube data and your channel analytics",
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		Long: "oytc is an API-key-only CLI for public YouTube Data API resources.\n" +
-			"It never performs OAuth or private-user operations.\n\n" +
+		Long: "oytc is a read-only CLI for public YouTube data and your own channel analytics.\n" +
+			"API keys cover public data; OAuth enables read-only owner analytics.\n\n" +
 			"Get started: oytc login, then oytc status --check.\n" +
 			"Docs: https://github.com/davis7dotsh/open-yt-cli/blob/main/docs/commands.md",
 	}
@@ -99,7 +105,8 @@ func (a *App) Root() *cobra.Command {
 		return nil
 	}
 
-	root.AddCommand(a.authCommands()...)
+	root.AddCommand(a.authenticationCommands()...)
+	root.AddCommand(a.analyticsCommand())
 	root.AddCommand(a.searchCommand())
 	root.AddCommand(a.channelCommand())
 	root.AddCommand(a.videoCommand())
@@ -110,111 +117,6 @@ func (a *App) Root() *cobra.Command {
 	root.AddCommand(a.categoryCommand(), a.languageCommand(), a.regionCommand())
 	root.AddCommand(a.versionCommand(), a.updateCommand(), a.skillsCommand())
 	return root
-}
-
-func (a *App) authCommands() []*cobra.Command {
-	login := &cobra.Command{
-		Use:   "login",
-		Short: "Securely validate and save a YouTube Data API key",
-		Args:  exactArgs(0),
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			fmt.Fprint(a.Err, "YouTube Data API key: ")
-			key, err := a.ReadSecret()
-			fmt.Fprintln(a.Err)
-			if err != nil {
-				return fmt.Errorf("read API key: %w", err)
-			}
-			key = strings.TrimSpace(key)
-			if key == "" {
-				return &UsageError{Message: "API key cannot be empty"}
-			}
-			client := a.client(key)
-			if _, err := client.Get(cmd.Context(), "i18nLanguages", url.Values{"part": {"snippet"}}); err != nil {
-				return fmt.Errorf("API key validation failed: %w", err)
-			}
-			path, err := config.Save(key)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(a.Out, "API key validated and saved to %s (%s)\n", path, config.Fingerprint(key))
-			if config.EnvKeySet() {
-				fmt.Fprintln(a.Out, "Note: OYTC_API_KEY remains the active, higher-precedence credential.")
-			}
-			return nil
-		},
-	}
-
-	var check bool
-	status := &cobra.Command{
-		Use:   "status",
-		Short: "Show local credential status; optionally validate it",
-		Args:  exactArgs(0),
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			credentials, err := config.Load()
-			if err != nil {
-				return err
-			}
-			configured := credentials.Key != ""
-			if a.outputFormat() != "table" {
-				state := map[string]any{"configured": configured, "source": credentials.Source, "path": credentials.Path}
-				if configured {
-					state["fingerprint"] = config.Fingerprint(credentials.Key)
-				}
-				if check {
-					if !configured {
-						return youtube.ErrMissingKey
-					}
-					_, err := a.client(credentials.Key).Get(cmd.Context(), "i18nLanguages", url.Values{"part": {"snippet"}})
-					state["valid"] = err == nil
-					if err != nil {
-						return err
-					}
-				}
-				columns := a.columns
-				if len(columns) == 0 {
-					columns = []string{"configured", "source", "path", "fingerprint", "valid"}
-				}
-				return output.RenderObject(a.Out, state, a.outputFormat(), columns, a.noHeader)
-			}
-			fmt.Fprintf(a.Out, "Configured: %t\nSource: %s\nPath: %s\n", configured, valueOr(credentials.Source, "none"), credentials.Path)
-			if configured {
-				fmt.Fprintf(a.Out, "Fingerprint: %s\n", config.Fingerprint(credentials.Key))
-			}
-			if check {
-				if !configured {
-					return youtube.ErrMissingKey
-				}
-				if _, err := a.client(credentials.Key).Get(cmd.Context(), "i18nLanguages", url.Values{"part": {"snippet"}}); err != nil {
-					return err
-				}
-				fmt.Fprintln(a.Out, "Remote check: valid")
-			}
-			return nil
-		},
-	}
-	status.Flags().BoolVar(&check, "check", false, "validate the active key with the API")
-
-	logout := &cobra.Command{
-		Use:   "logout",
-		Short: "Remove the stored credential",
-		Args:  exactArgs(0),
-		RunE: func(_ *cobra.Command, _ []string) error {
-			path, removed, err := config.Remove()
-			if err != nil {
-				return err
-			}
-			if removed {
-				fmt.Fprintf(a.Out, "Removed stored credentials at %s.\n", path)
-			} else {
-				fmt.Fprintf(a.Out, "No stored credentials at %s.\n", path)
-			}
-			if config.EnvKeySet() {
-				fmt.Fprintln(a.Out, "OYTC_API_KEY is still set; environment credentials remain active.")
-			}
-			return nil
-		},
-	}
-	return []*cobra.Command{login, status, logout}
 }
 
 func (a *App) searchCommand() *cobra.Command {
@@ -318,10 +220,19 @@ func (a *App) authenticatedClient() (*youtube.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if credentials.Key == "" {
+	if credentials.Key != "" {
+		return a.client(credentials.Key), nil
+	}
+	if credentials.OAuth == nil {
 		return nil, youtube.ErrMissingKey
 	}
-	return a.client(credentials.Key), nil
+	source, err := a.oauthTokenSource(credentials.OAuth)
+	if err != nil {
+		return nil, err
+	}
+	client := a.client("")
+	client.TokenSource = source.AccessToken
+	return client, nil
 }
 
 func (a *App) runList(cmd *cobra.Command, resource string, params url.Values, flags listFlags, defaultColumns []string) error {

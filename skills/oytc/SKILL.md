@@ -1,6 +1,6 @@
 ---
 name: oytc
-description: Query public YouTube data (search, videos, channels, playlists, comments, live chat) via the oytc CLI, which uses the YouTube Data API v3 with an API key. Use whenever a task needs public YouTube information — video/channel stats, search results, uploads, comment threads, live chat. NOT for private channel/account analytics (watch time, revenue, demographics, private playlists) — those require OAuth and are unsupported.
+description: Query public YouTube data (search, videos, channels, playlists, comments, live chat) via the oytc CLI, which uses the YouTube Data API v3 with an API key. Use whenever a task needs public YouTube information — video/channel stats, search results, uploads, comment threads
 ---
 
 # oytc — public YouTube data CLI

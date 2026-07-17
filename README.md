@@ -46,6 +46,7 @@ table|json|jsonl|tsv` and `--columns` cover the rest.
 | `live-chat` | Live chat, one page or continuous (REST polling fallback) |
 | `category` / `language` / `region` | YouTube metadata lists |
 | `login` / `status` / `logout` | Manage the locally stored API key |
+| `skills install` | Confirm and install the bundled agent skill to `~/.agents/skills/oytc` |
 | `version` | Show version, commit, and build date |
 | `update` (alias `upgrade`) | Checksum-verified self-update from GitHub Releases |
 
@@ -85,7 +86,7 @@ Live chat streaming uses documented REST polling, not the official gRPC stream.
 - [Command reference](docs/commands.md) — every command, flag, output format, exit code
 - [Google API key setup](docs/google-api-key.md) — deterministic click-by-click guide
 - [Releasing](docs/releasing.md) — release procedure and required repo settings
-- [Agent skill](skills/oytc/SKILL.md) — using `oytc` from AI agents
+- [Agent skill](skills/oytc/SKILL.md) — using `oytc` from AI agents; install it with `oytc skills install`
 
 ## Development
 

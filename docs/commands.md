@@ -17,6 +17,7 @@ Help output is always authoritative: run `oytc --help`, `oytc <command> --help`,
 - [Subscriptions](#subscriptions)
 - [Live chat](#live-chat)
 - [Metadata lists](#metadata-lists)
+- [Agent skill installation](#agent-skill-installation)
 - [Version and self-update](#version-and-self-update)
 - [Output](#output)
 - [Pagination and quota](#pagination-and-quota)
@@ -64,6 +65,7 @@ oytc category list (--region <REGION> | --id <CATEGORY_IDS>)
 oytc language list
 oytc region list
 
+oytc skills install                              # `oytc skill install` also works
 oytc version
 oytc update [--check] [--version vX.Y.Z]     # `oytc upgrade` is an alias
 ```
@@ -230,6 +232,18 @@ oytc category list --id 1,10,28
 oytc language list
 oytc region list
 ```
+
+## Agent skill installation
+
+```sh
+oytc skills install
+```
+
+`skills install` (also available as `skill install`) shows the exact destination and the
+write permission it needs, then waits for an explicit `y`/`yes` confirmation. On approval,
+it atomically installs the skill bundled with that CLI release to
+`~/.agents/skills/oytc`, replacing an older installation. Declining makes no filesystem
+changes. The installed bundle contains `SKILL.md` and its `references/` files.
 
 ## Version and self-update
 

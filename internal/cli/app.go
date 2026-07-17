@@ -36,6 +36,8 @@ type App struct {
 	// UpdaterFactory lets tests replace the self-updater's endpoints,
 	// HTTP client, and target executable.
 	UpdaterFactory func(*update.Updater) *update.Updater
+	// SkillInstallPath overrides ~/.agents/skills/oytc in tests.
+	SkillInstallPath string
 
 	format   string
 	columns  []string
@@ -106,7 +108,7 @@ func (a *App) Root() *cobra.Command {
 	root.AddCommand(a.subscriptionCommand())
 	root.AddCommand(a.liveChatCommand())
 	root.AddCommand(a.categoryCommand(), a.languageCommand(), a.regionCommand())
-	root.AddCommand(a.versionCommand(), a.updateCommand())
+	root.AddCommand(a.versionCommand(), a.updateCommand(), a.skillsCommand())
 	return root
 }
 

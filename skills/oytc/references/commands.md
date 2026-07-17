@@ -42,6 +42,7 @@ List commands: `--page-size N`, `--page-token T`, `--all`, `--limit N`.
 | `category list` | one of `--region`/`--id` | |
 | `language list` / `region list` | — | |
 | `status [--check]` | — | local-only unless `--check` |
+| `skills install` | confirmation | installs this bundled skill to `~/.agents/skills/oytc` |
 | `version` | — | version/commit/date/platform |
 | `update [--check] [--version vX.Y.Z]` | — | self-update; alias `upgrade` |
 

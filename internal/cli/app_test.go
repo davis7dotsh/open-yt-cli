@@ -215,8 +215,10 @@ func testApp(server *httptest.Server) (*App, *bytes.Buffer, *bytes.Buffer) {
 	app.In = bytes.NewBuffer(nil)
 	app.Out = out
 	app.Err = errOut
-	app.BaseURL = server.URL + "/youtube/v3"
-	app.HTTPClient = server.Client()
+	if server != nil {
+		app.BaseURL = server.URL + "/youtube/v3"
+		app.HTTPClient = server.Client()
+	}
 	app.IsOutputTTY = false
 	return app, out, errOut
 }

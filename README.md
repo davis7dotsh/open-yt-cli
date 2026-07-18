@@ -75,7 +75,8 @@ precedence over the saved key.
 For analytics, follow [docs/oauth.md](docs/oauth.md), then run `oytc login --oauth`.
 `OYTC_OAUTH_CLIENT_ID` and `OYTC_OAUTH_CLIENT_SECRET` can bootstrap login non-interactively;
 otherwise `oytc` prompts for both (the secret without echo). OAuth requests only
-`youtube.readonly` and `yt-analytics.readonly`.
+`yt-analytics.readonly`, which Google classifies as non-sensitive — consent therefore works
+even on accounts that hard-block unverified apps requesting sensitive scopes.
 
 ## Security & config
 
@@ -93,8 +94,9 @@ otherwise `oytc` prompts for both (the secret without echo). OAuth requests only
 
 An API key remains sufficient for every public-data command. Optional OAuth 2.0 support is
 also strictly read-only and is used for **your authorized channel's YouTube Analytics**:
-views, watch time, impressions, traffic sources, and audience demographics supported by
-Google's metric/dimension compatibility rules.
+views, watch time, retention, traffic sources, and audience demographics supported by
+Google's metric/dimension compatibility rules. (Thumbnail impressions and CTR are not in
+the Analytics API — those remain YouTube Studio-only.)
 
 There are still zero writes: uploads, edits, moderation, and mutations are out of scope.
 Revenue scopes/metrics, content-owner reports, and arbitrary private-account operations are

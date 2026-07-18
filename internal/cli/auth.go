@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"open-yt-cli/internal/analytics"
 	"open-yt-cli/internal/config"
 	"open-yt-cli/internal/oauth"
 	"open-yt-cli/internal/output"
@@ -18,11 +19,18 @@ import (
 )
 
 const (
+	// youtubeReadonlyScope is reserved for future mine=true Data API reads.
+	// It is NOT requested: Google classifies it as sensitive, and unverified
+	// apps requesting sensitive scopes are hard-blocked for accounts with
+	// Advanced Protection or restrictive Workspace policies.
 	youtubeReadonlyScope   = "https://www.googleapis.com/auth/youtube.readonly"
 	analyticsReadonlyScope = "https://www.googleapis.com/auth/yt-analytics.readonly"
 )
 
-var oauthScopes = []string{youtubeReadonlyScope, analyticsReadonlyScope}
+// oauthScopes requests only what analytics commands need.
+// yt-analytics.readonly is classified non-sensitive, so consent works even
+// for unverified apps on protected accounts.
+var oauthScopes = []string{analyticsReadonlyScope}
 
 func (a *App) authenticationCommands() []*cobra.Command {
 	var useOAuth bool
@@ -158,9 +166,22 @@ func (a *App) runStatus(cmd *cobra.Command, check bool) error {
 			if err != nil {
 				return err
 			}
-			client := a.client("")
-			client.TokenSource = source.AccessToken
-			_, err = client.Get(cmd.Context(), "i18nLanguages", url.Values{"part": {"snippet"}})
+			client := analytics.NewClient(source.AccessToken, a.timeout)
+			if a.AnalyticsBaseURL != "" {
+				client.SetBaseURL(a.AnalyticsBaseURL)
+			}
+			if a.HTTPClient != nil {
+				client.SetHTTPClient(a.HTTPClient)
+			}
+			// Validate against the Analytics API, which matches the scopes
+			// oytc actually requests (a Data API call would need youtube.readonly).
+			now := time.Now().UTC()
+			_, err = client.Report(cmd.Context(), analytics.Query{
+				StartDate: now.AddDate(0, 0, -7).Format("2006-01-02"),
+				EndDate:   now.Format("2006-01-02"),
+				Metrics:   []string{"views"},
+				Limit:     1,
+			})
 			state["oauth"].(map[string]any)["valid"] = err == nil
 			if err != nil {
 				return oauthAuthHint(err)

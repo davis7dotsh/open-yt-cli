@@ -1,12 +1,14 @@
 # OAuth setup for YouTube Analytics
 
 `oytc analytics` needs authorization from the owner of the channel being reported. The CLI
-uses Google's OAuth 2.0 loopback flow with PKCE and requests only these read-only scopes:
+uses Google's OAuth 2.0 loopback flow with PKCE and requests only one read-only scope:
 
-- `https://www.googleapis.com/auth/youtube.readonly`
 - `https://www.googleapis.com/auth/yt-analytics.readonly`
 
-It has no write commands and does not request upload, moderation, revenue, or content-owner
+Google classifies that scope as **non-sensitive**, so consent works even on accounts that
+hard-block unverified apps requesting sensitive scopes (Advanced Protection, restrictive
+Workspace policies). `oytc` deliberately does not request `youtube.readonly` (sensitive);
+it has no write commands and does not request upload, moderation, revenue, or content-owner
 scopes.
 
 ## 1. Create or select a Google Cloud project
@@ -33,9 +35,12 @@ this **OAuth consent screen**):
 1. Create an app registration and supply the required app name and contact addresses.
 2. Choose **External** unless every account that will authorize belongs to one Google
    Workspace organization that you control.
-3. Add these scopes under **Data Access**:
-   - `.../auth/youtube.readonly`
+3. Add this scope under **Data Access**:
    - `.../auth/yt-analytics.readonly`
+
+   Do not add `.../auth/youtube.readonly`: it is classified sensitive, and unverified apps
+   requesting sensitive scopes are hard-blocked (not just warned) for accounts with
+   Advanced Protection or restrictive Workspace policies.
 4. While the app is in **Testing**, add each authorizing Google account as a test user.
 5. When ready, publish the app to **Production**.
 
@@ -45,12 +50,12 @@ publicly writable or broaden its scopes; it changes the consent app's publishing
 
 ### Unverified-app warning and user cap
 
-These YouTube scopes are sensitive. A personal app that has not completed Google's
-verification can show an **“Google hasn't verified this app”** warning. For an app you
-created and trust, use the warning's advanced path to continue and inspect the requested
-scopes before approving.
+`yt-analytics.readonly` is classified non-sensitive, so most accounts see a plain consent
+screen with no warning. If Google still shows a **“Google hasn't verified this app”**
+interstitial, use the warning's advanced path to continue (for an app you created and
+trust) and inspect the requested scopes before approving.
 
-An unverified External app using sensitive scopes is generally limited to 100 users. That
+An unverified External app is generally limited to 100 users. That
 is normally sufficient for a personal Desktop client. Complete Google's verification
 process before distributing one client ID beyond that cap; do not ask users to share one
 person's client secret or tokens.

@@ -120,7 +120,7 @@ func TestAnalyticsCommands(t *testing.T) {
 		filters    string
 	}{
 		{"report", []string{"analytics", "report", "--metrics", "views,likes", "--dimensions", "day"}, "views,likes", "day", ""},
-		{"overview", []string{"analytics", "overview", "--by", "month"}, "views,estimatedMinutesWatched,averageViewDuration,impressions,impressionClickThroughRate,subscribersGained", "month", ""},
+		{"overview", []string{"analytics", "overview", "--by", "month"}, "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained", "month", ""},
 		{"video", []string{"analytics", "video", "video-id"}, "views,estimatedMinutesWatched,averageViewDuration,likes,comments,subscribersGained", "", "video==video-id"},
 		{"traffic", []string{"analytics", "traffic-sources"}, "views,estimatedMinutesWatched", "insightTrafficSourceType", ""},
 		{"demographics", []string{"analytics", "demographics"}, "viewerPercentage", "ageGroup,gender", ""},

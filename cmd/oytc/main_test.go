@@ -49,6 +49,7 @@ func TestExitCodes(t *testing.T) {
 		{"codeless OAuth error", &oauth.Error{HTTPStatus: 400}, 3},
 		{"transient OAuth error", &oauth.Error{HTTPStatus: 503, Code: "temporarily_unavailable"}, 6},
 		{"OAuth server error", &oauth.Error{HTTPStatus: 500, Code: "server_error"}, 6},
+		{"OAuth rate limited", &oauth.Error{HTTPStatus: 429}, 5},
 		{"insufficient OAuth permissions", &youtube.APIError{HTTPStatus: 403, Code: 403, Reasons: []string{"insufficientPermissions"}}, 3},
 		{"invalid key camel case", &youtube.APIError{HTTPStatus: 400, Code: 400, Reasons: []string{"keyInvalid"}}, 3},
 		{"invalid key uppercase underscore", &youtube.APIError{HTTPStatus: 400, Code: 400, Reasons: []string{"badRequest", "API_KEY_INVALID"}}, 3},

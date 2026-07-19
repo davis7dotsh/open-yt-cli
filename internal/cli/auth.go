@@ -169,6 +169,9 @@ func (a *App) runStatus(cmd *cobra.Command, check bool) error {
 		columns := a.columns
 		if len(columns) == 0 {
 			columns = []string{"path", "api_key.configured", "api_key.source", "api_key.fingerprint", "oauth.configured", "oauth.client_id", "oauth.scopes", "oauth.expiry"}
+			if check {
+				columns = []string{"path", "api_key.configured", "api_key.source", "api_key.fingerprint", "api_key.valid", "oauth.configured", "oauth.client_id", "oauth.scopes", "oauth.expiry", "oauth.valid"}
+			}
 		}
 		if err := output.RenderObject(a.Out, state, a.outputFormat(), columns, a.noHeader); err != nil {
 			return err

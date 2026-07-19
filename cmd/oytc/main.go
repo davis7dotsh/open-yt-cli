@@ -60,6 +60,9 @@ func exitCode(err error) int {
 		case "server_error", "temporarily_unavailable":
 			return 6
 		}
+		if oauthErr.HTTPStatus == 429 {
+			return 5
+		}
 		if oauthErr.HTTPStatus >= 500 {
 			return 6
 		}

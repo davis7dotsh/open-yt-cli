@@ -155,6 +155,13 @@ func Remove() (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
+	// Take the same lock as saves: a concurrent save that already read the
+	// file must not be able to recreate credentials after removal.
+	unlock, err := acquireUpdateLock(path)
+	if err != nil {
+		return "", false, err
+	}
+	defer unlock()
 	if err := os.Remove(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return path, false, nil

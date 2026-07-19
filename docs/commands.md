@@ -1,9 +1,10 @@
 # oytc command reference
 
 `oytc` is a read-only CLI for public YouTube Data API v3 resources and the authorized
-user's YouTube Analytics. Public-data commands accept an API key (or the read-only OAuth
-credential); analytics commands require OAuth. This page documents every command, shared
-flags, output formats, pagination, configuration, and error behavior.
+user's YouTube Analytics. Public-data commands use an API key; analytics commands require
+OAuth. (The default OAuth grant covers only analytics — it is used for public reads only
+when it also includes the YouTube Data read-only scope.) This page documents every
+command, shared flags, output formats, pagination, configuration, and error behavior.
 
 Help output is always authoritative: run `oytc --help`, `oytc <command> --help`, or
 `oytc <command> <subcommand> --help` for the flags supported by your installed version.

@@ -38,7 +38,10 @@ type App struct {
 	OpenBrowser      func(string) error
 	Now              func() time.Time
 	ReadSecret       func() (string, error)
-	IsOutputTTY      bool
+	// stdin buffers a.In so consecutive prompts (e.g. OAuth client ID then
+	// secret) never lose bytes prefetched by an earlier bufio.Reader.
+	stdin       *bufio.Reader
+	IsOutputTTY bool
 	// UpdaterFactory lets tests replace the self-updater's endpoints,
 	// HTTP client, and target executable.
 	UpdaterFactory func(*update.Updater) *update.Updater
@@ -223,7 +226,10 @@ func (a *App) authenticatedClient() (*youtube.Client, error) {
 	if credentials.Key != "" {
 		return a.client(credentials.Key), nil
 	}
-	if credentials.OAuth == nil {
+	// Only fall back to OAuth for Data API reads when the stored grant
+	// actually covers them; the default analytics-only authorization would
+	// produce an opaque 401/403 instead of a clear "run login" hint.
+	if credentials.OAuth == nil || !hasScope(credentials.OAuth.Scopes, youtubeReadonlyScope) {
 		return nil, youtube.ErrMissingKey
 	}
 	source, err := a.oauthTokenSource(credentials.OAuth)
@@ -233,6 +239,15 @@ func (a *App) authenticatedClient() (*youtube.Client, error) {
 	client := a.client("")
 	client.TokenSource = source.AccessToken
 	return client, nil
+}
+
+func hasScope(scopes []string, scope string) bool {
+	for _, granted := range scopes {
+		if granted == scope {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) runList(cmd *cobra.Command, resource string, params url.Values, flags listFlags, defaultColumns []string) error {
@@ -280,11 +295,21 @@ func (a *App) readSecret() (string, error) {
 		data, err := term.ReadPassword(int(file.Fd()))
 		return string(data), err
 	}
-	line, err := bufio.NewReader(a.In).ReadString('\n')
+	line, err := a.stdinReader().ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}
 	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// stdinReader returns a single shared buffered reader over a.In. Creating a
+// fresh bufio.Reader per prompt would drop bytes an earlier reader had already
+// buffered from piped input.
+func (a *App) stdinReader() *bufio.Reader {
+	if a.stdin == nil {
+		a.stdin = bufio.NewReader(a.In)
+	}
+	return a.stdin
 }
 
 func addListFlags(cmd *cobra.Command, flags *listFlags, defaultSize, maxSize int) {

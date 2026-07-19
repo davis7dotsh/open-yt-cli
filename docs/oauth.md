@@ -55,10 +55,11 @@ screen with no warning. If Google still shows a **“Google hasn't verified this
 interstitial, use the warning's advanced path to continue (for an app you created and
 trust) and inspect the requested scopes before approving.
 
-An unverified External app is generally limited to 100 users. That
-is normally sufficient for a personal Desktop client. Complete Google's verification
-process before distributing one client ID beyond that cap; do not ask users to share one
-person's client secret or tokens.
+An unverified External app is generally limited to 100 users over the lifetime of the
+Google Cloud project (the cap is project-wide, not per client ID, and cannot be reset).
+That is normally sufficient for a personal Desktop client. Complete Google's verification
+process before distributing beyond that cap; do not ask users to share one person's
+client secret or tokens.
 
 ## 4. Create a Desktop OAuth client
 
@@ -99,8 +100,8 @@ Paste the client ID at the normal prompt and the client secret at the no-echo pr
 
 `oytc` prints the authorization URL, attempts to open it in the default browser, and waits
 up to about three minutes on a random local loopback port. Sign in as the channel owner,
-review the two read-only scopes, and approve. The browser then redirects only to the local
-listener. On success, `oytc` exchanges the one-time code using PKCE and stores the client
+review the read-only analytics scope, and approve. The browser then redirects only to the
+local listener. On success, `oytc` exchanges the one-time code using PKCE and stores the client
 credentials and tokens in the protected `auth.json` file.
 
 No browser was opened? Copy the printed URL into a browser on the same machine where
@@ -128,7 +129,8 @@ from the environment.
 - **`invalid_grant`**: the refresh token expired or was revoked; run `oytc login --oauth`
   again. Publishing a Testing app to Production prevents the usual seven-day test-token
   expiry for newly issued tokens.
-- **`insufficientPermissions`**: re-run `oytc login --oauth` and approve both scopes.
+- **`insufficientPermissions`**: re-run `oytc login --oauth` and approve the requested
+  scope.
 - **API not enabled**: enable both APIs in the same project as the Desktop client.
 - **Metric/dimension error**: Google restricts compatible Analytics combinations; adjust
   the report's `--metrics`, `--dimensions`, and filters. The CLI preserves Google's error

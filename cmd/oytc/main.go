@@ -54,10 +54,16 @@ func exitCode(err error) int {
 	}
 	var oauthErr *oauth.Error
 	if errors.As(err, &oauthErr) {
+		// Every structured OAuth failure is an auth problem (exit 3)
+		// except clearly transient Google-side errors.
 		switch oauthErr.Code {
-		case "invalid_grant", "invalid_client", "access_denied", "unauthorized_client":
-			return 3
+		case "server_error", "temporarily_unavailable":
+			return 6
 		}
+		if oauthErr.HTTPStatus >= 500 {
+			return 6
+		}
+		return 3
 	}
 	var apiErr *youtube.APIError
 	if errors.As(err, &apiErr) {

@@ -79,8 +79,11 @@ func TestOAuthLoginLoopbackSavesWithoutClobberingAPIKey(t *testing.T) {
 		}
 		callback := parsed.Query().Get("redirect_uri") + "?code=login-code&state=" + url.QueryEscape(parsed.Query().Get("state"))
 		go func() {
-			response, err := http.Get(callback)
-			if err == nil {
+			request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, callback, nil)
+			if err != nil {
+				return
+			}
+			if response, err := http.DefaultClient.Do(request); err == nil {
 				response.Body.Close()
 			}
 		}()

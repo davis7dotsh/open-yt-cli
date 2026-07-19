@@ -103,11 +103,10 @@ func Login(ctx context.Context, cfg Config) (Token, error) {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
 		if query.Get("state") != state {
+			// Reject the request but keep the login alive: any unrelated
+			// local request (favicon probe, port scanner) must not be able
+			// to abort the flow before Google's real redirect arrives.
 			http.Error(w, "OAuth state did not match. You can close this window.", http.StatusBadRequest)
-			select {
-			case result <- callbackResult{err: errors.New("OAuth callback state did not match")}:
-			default:
-			}
 			return
 		}
 		if code := query.Get("error"); code != "" {

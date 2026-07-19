@@ -109,6 +109,19 @@ func TestRevoke(t *testing.T) {
 	}
 }
 
+// getCallback issues the loopback callback request with the test's context so
+// a stalled listener cannot outlive the test.
+func getCallback(t *testing.T, callback string) {
+	t.Helper()
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, callback, nil)
+	if err != nil {
+		return
+	}
+	if resp, err := http.DefaultClient.Do(request); err == nil {
+		resp.Body.Close()
+	}
+}
+
 func TestLoginLoopbackSuccess(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
@@ -135,12 +148,7 @@ func TestLoginLoopbackSuccess(t *testing.T) {
 			t.Errorf("missing PKCE/state: %s", target)
 		}
 		callback := parsed.Query().Get("redirect_uri") + "?code=callback-code&state=" + url.QueryEscape(parsed.Query().Get("state"))
-		go func() {
-			resp, err := http.Get(callback)
-			if err == nil {
-				resp.Body.Close()
-			}
-		}()
+		go getCallback(t, callback)
 		return nil
 	}
 	token, err := Login(context.Background(), cfg)
@@ -152,17 +160,49 @@ func TestLoginLoopbackSuccess(t *testing.T) {
 	}
 }
 
+func TestLoginLoopbackSurvivesStrayRequests(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Error(err)
+		}
+		_, _ = io.WriteString(w, `{"access_token":"access","refresh_token":"refresh","expires_in":3600,"scope":"scope"}`)
+	}))
+	defer server.Close()
+	cfg := Config{
+		ClientID: "id", ClientSecret: "secret", Scopes: []string{"scope"},
+		AuthorizationURL: "https://accounts.example/auth", TokenURL: server.URL,
+		HTTPClient: server.Client(), Timeout: 3 * time.Second,
+	}
+	cfg.OpenBrowser = func(target string) error {
+		parsed, err := url.Parse(target)
+		if err != nil {
+			return err
+		}
+		redirect := parsed.Query().Get("redirect_uri")
+		go func() {
+			// A stray local request (no/incorrect state) must not abort the
+			// login before the real callback arrives.
+			getCallback(t, redirect+"/favicon.ico")
+			getCallback(t, redirect+"?code=evil&state=wrong")
+			getCallback(t, redirect+"?code=callback-code&state="+url.QueryEscape(parsed.Query().Get("state")))
+		}()
+		return nil
+	}
+	token, err := Login(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token.AccessToken != "access" {
+		t.Fatalf("token = %#v", token)
+	}
+}
+
 func TestLoginLoopbackUserDenied(t *testing.T) {
 	cfg := Config{ClientID: "id", ClientSecret: "secret", AuthorizationURL: "https://accounts.example/auth", Timeout: 3 * time.Second}
 	cfg.OpenBrowser = func(target string) error {
 		parsed, _ := url.Parse(target)
 		callback := parsed.Query().Get("redirect_uri") + "?error=access_denied&error_description=nope&state=" + url.QueryEscape(parsed.Query().Get("state"))
-		go func() {
-			resp, err := http.Get(callback)
-			if err == nil {
-				resp.Body.Close()
-			}
-		}()
+		go getCallback(t, callback)
 		return nil
 	}
 	_, err := Login(context.Background(), cfg)

@@ -90,6 +90,11 @@ func Load() (Credentials, error) {
 	}
 	file, exists, err := loadFile(path)
 	if err != nil {
+		// A corrupt or unreadable auth.json must not block the
+		// higher-precedence environment key.
+		if key := strings.TrimSpace(os.Getenv(envKey)); key != "" {
+			return Credentials{Key: key, Source: envKey, Path: path}, nil
+		}
 		return Credentials{Path: path}, err
 	}
 	credentials := Credentials{Path: path}
@@ -183,12 +188,40 @@ func updateFile(update func(*File)) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Serialize the read-modify-write across processes with an exclusive
+	// advisory lock on a sidecar file; the atomic rename alone cannot
+	// prevent one concurrent update from silently overwriting another
+	// (e.g. a token refresh racing an API-key save).
+	unlock, err := acquireUpdateLock(path)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	file, _, err := loadFile(path)
 	if err != nil {
 		return "", err
 	}
 	update(&file)
 	return saveFile(path, file)
+}
+
+func acquireUpdateLock(path string) (func(), error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create config directory: %w", err)
+	}
+	lock, err := os.OpenFile(filepath.Join(dir, ".auth.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open credential lock file: %w", err)
+	}
+	if err := lockFile(lock); err != nil {
+		lock.Close()
+		return nil, fmt.Errorf("lock credential file: %w", err)
+	}
+	return func() {
+		_ = unlockFile(lock)
+		lock.Close()
+	}, nil
 }
 
 func loadFile(path string) (File, bool, error) {

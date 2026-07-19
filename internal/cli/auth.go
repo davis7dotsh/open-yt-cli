@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -97,11 +96,10 @@ func (a *App) loginAPIKey(cmd *cobra.Command) error {
 
 func (a *App) loginOAuth(cmd *cobra.Command) error {
 	clientID, clientSecret := config.OAuthBootstrap()
-	reader := bufio.NewReader(a.In)
 	var err error
 	if clientID == "" {
 		fmt.Fprint(a.Err, "OAuth client ID: ")
-		clientID, err = reader.ReadString('\n')
+		clientID, err = a.stdinReader().ReadString('\n')
 		if err != nil && strings.TrimSpace(clientID) == "" {
 			return fmt.Errorf("read OAuth client ID: %w", err)
 		}
@@ -150,42 +148,20 @@ func (a *App) runStatus(cmd *cobra.Command, check bool) error {
 	if keyConfigured {
 		state["api_key"].(map[string]any)["fingerprint"] = config.Fingerprint(credentials.Key)
 	}
+	// Validate every configured credential before failing, so a stale API
+	// key cannot mask a working OAuth authorization (or vice versa).
+	var keyErr, oauthErr error
 	if check {
 		if !keyConfigured && !oauthConfigured {
 			return youtube.ErrMissingKey
 		}
 		if keyConfigured {
-			_, err := a.client(credentials.Key).Get(cmd.Context(), "i18nLanguages", url.Values{"part": {"snippet"}})
-			state["api_key"].(map[string]any)["valid"] = err == nil
-			if err != nil {
-				return err
-			}
+			_, keyErr = a.client(credentials.Key).Get(cmd.Context(), "i18nLanguages", url.Values{"part": {"snippet"}})
+			state["api_key"].(map[string]any)["valid"] = keyErr == nil
 		}
 		if oauthConfigured {
-			source, err := a.oauthTokenSource(credentials.OAuth)
-			if err != nil {
-				return err
-			}
-			client := analytics.NewClient(source.AccessToken, a.timeout)
-			if a.AnalyticsBaseURL != "" {
-				client.SetBaseURL(a.AnalyticsBaseURL)
-			}
-			if a.HTTPClient != nil {
-				client.SetHTTPClient(a.HTTPClient)
-			}
-			// Validate against the Analytics API, which matches the scopes
-			// oytc actually requests (a Data API call would need youtube.readonly).
-			now := time.Now().UTC()
-			_, err = client.Report(cmd.Context(), analytics.Query{
-				StartDate: now.AddDate(0, 0, -7).Format("2006-01-02"),
-				EndDate:   now.Format("2006-01-02"),
-				Metrics:   []string{"views"},
-				Limit:     1,
-			})
-			state["oauth"].(map[string]any)["valid"] = err == nil
-			if err != nil {
-				return oauthAuthHint(err)
-			}
+			oauthErr = a.checkOAuth(cmd.Context(), credentials.OAuth)
+			state["oauth"].(map[string]any)["valid"] = oauthErr == nil
 		}
 	}
 
@@ -194,7 +170,10 @@ func (a *App) runStatus(cmd *cobra.Command, check bool) error {
 		if len(columns) == 0 {
 			columns = []string{"path", "api_key.configured", "api_key.source", "api_key.fingerprint", "oauth.configured", "oauth.client_id", "oauth.scopes", "oauth.expiry"}
 		}
-		return output.RenderObject(a.Out, state, a.outputFormat(), columns, a.noHeader)
+		if err := output.RenderObject(a.Out, state, a.outputFormat(), columns, a.noHeader); err != nil {
+			return err
+		}
+		return statusCheckError(keyErr, oauthErr)
 	}
 	fmt.Fprintf(a.Out, "Path: %s\nAPI key configured: %t\nAPI key source: %s\n", credentials.Path, keyConfigured, valueOr(credentials.Source, "none"))
 	if keyConfigured {
@@ -206,19 +185,63 @@ func (a *App) runStatus(cmd *cobra.Command, check bool) error {
 	}
 	if check {
 		if keyConfigured {
-			fmt.Fprintln(a.Out, "API key remote check: valid")
+			fmt.Fprintf(a.Out, "API key remote check: %s\n", checkVerdict(keyErr))
 		}
 		if oauthConfigured {
-			fmt.Fprintln(a.Out, "OAuth remote check: valid")
+			fmt.Fprintf(a.Out, "OAuth remote check: %s\n", checkVerdict(oauthErr))
 		}
 	}
+	return statusCheckError(keyErr, oauthErr)
+}
+
+// checkOAuth validates the stored OAuth authorization against the Analytics
+// API, which matches the scopes oytc actually requests (a Data API call would
+// need youtube.readonly).
+func (a *App) checkOAuth(ctx context.Context, stored *config.OAuthCredentials) error {
+	source, err := a.oauthTokenSource(stored)
+	if err != nil {
+		return err
+	}
+	client := analytics.NewClient(source.AccessToken, a.timeout)
+	if a.AnalyticsBaseURL != "" {
+		client.SetBaseURL(a.AnalyticsBaseURL)
+	}
+	if a.HTTPClient != nil {
+		client.SetHTTPClient(a.HTTPClient)
+	}
+	now := time.Now().UTC()
+	_, err = client.Report(ctx, analytics.Query{
+		StartDate: now.AddDate(0, 0, -7).Format("2006-01-02"),
+		EndDate:   now.Format("2006-01-02"),
+		Metrics:   []string{"views"},
+		Limit:     1,
+	})
+	if err != nil {
+		return oauthAuthHint(err)
+	}
 	return nil
+}
+
+func checkVerdict(err error) string {
+	if err != nil {
+		return fmt.Sprintf("invalid (%v)", err)
+	}
+	return "valid"
+}
+
+func statusCheckError(keyErr, oauthErr error) error {
+	if keyErr != nil {
+		return keyErr
+	}
+	return oauthErr
 }
 
 func (a *App) runLogout(ctx context.Context) error {
 	credentials, loadErr := config.Load()
 	if loadErr != nil {
-		return loadErr
+		// Removal must still work when the file is corrupt; revocation is
+		// impossible without parsed credentials, so warn and continue.
+		fmt.Fprintf(a.Err, "Warning: could not read stored credentials (skipping OAuth revocation): %v\n", loadErr)
 	}
 	if credentials.OAuth != nil {
 		token := credentials.OAuth.RefreshToken

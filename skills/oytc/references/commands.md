@@ -16,14 +16,15 @@ is authoritative for the installed version. This file is a condensed matrix.
 Resource commands: `--parts` (API parts), `--fields` (Google partial-response selector),
 sometimes `--hl` (localization).
 
-Public list commands use an API key (or the read-only OAuth fallback): `--page-size N`,
-`--page-token T`, `--all`, `--limit N`. Analytics commands require OAuth.
+Public list commands use an API key: `--page-size N`, `--page-token T`, `--all`,
+`--limit N`. Analytics commands require OAuth (the default OAuth grant covers only
+analytics, not public Data API reads).
 
 ## Commands
 
 | Command | Required input | Key flags |
 | --- | --- | --- |
-| `analytics report` **(OAuth)** | `--metrics CSV` | `--dimensions`, `--start/-end` (YYYY-MM-DD), `--filters`, `--sort`, `--limit` (1–200) |
+| `analytics report` **(OAuth)** | `--metrics CSV` | `--dimensions`, `--start/--end` (YYYY-MM-DD), `--filters`, `--sort`, `--limit` (1–200) |
 | `analytics overview` **(OAuth)** | — | `--by day\|month`, date/filter/sort/limit flags |
 | `analytics video <ID>` **(OAuth)** | owned video ID | core metrics; applies `video==ID`; date/filter/sort/limit flags |
 | `analytics traffic-sources` **(OAuth)** | — | groups views/watch time by traffic source |

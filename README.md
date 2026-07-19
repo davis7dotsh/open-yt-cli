@@ -33,7 +33,7 @@ oytc playlist items PLxxxx --all --limit 250
 # Optional: authorize read-only access to your own channel analytics
 oytc login --oauth
 oytc analytics overview --by day --format json
-oytc analytics video dQw4w9WgXcQ --start 2026-01-01 --end 2026-01-31
+oytc analytics video YOUR_OWN_VIDEO_ID --start 2026-01-01 --end 2026-01-31   # must be your channel's video
 ```
 
 Output defaults to a compact table on a terminal and stable JSON when piped; `--format

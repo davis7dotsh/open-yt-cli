@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -106,6 +107,62 @@ func TestOAuthBootstrapEnvironmentPrecedence(t *testing.T) {
 	id, secret := OAuthBootstrap()
 	if id != "environment-id" || secret != "environment-secret" {
 		t.Fatalf("OAuthBootstrap() = %q, %q", id, secret)
+	}
+}
+
+func TestConcurrentUpdatesAreNotLost(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "")
+	oauth := OAuthCredentials{
+		ClientID: "id", ClientSecret: "secret", AccessToken: "access",
+		RefreshToken: "refresh", Expiry: "2026-02-01T12:00:00Z", Scopes: []string{"scope"},
+	}
+	var group sync.WaitGroup
+	errs := make(chan error, 2)
+	group.Add(2)
+	go func() {
+		defer group.Done()
+		_, err := Save("api-secret")
+		errs <- err
+	}()
+	go func() {
+		defer group.Done()
+		_, err := SaveOAuth(oauth)
+		errs <- err
+	}()
+	group.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	credentials, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credentials.Key != "api-secret" || credentials.OAuth == nil || credentials.OAuth.RefreshToken != "refresh" {
+		t.Fatalf("a concurrent update was lost: %#v", credentials)
+	}
+}
+
+func TestLoadFallsBackToEnvironmentKeyWhenFileCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OYTC_CONFIG_DIR", dir)
+	t.Setenv("OYTC_API_KEY", "environment-secret")
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := Load()
+	if err != nil {
+		t.Fatalf("Load with corrupt file and env key: %v", err)
+	}
+	if credentials.Key != "environment-secret" || credentials.Source != "OYTC_API_KEY" {
+		t.Fatalf("credentials = %#v", credentials)
+	}
+	t.Setenv("OYTC_API_KEY", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected parse error without environment key")
 	}
 }
 

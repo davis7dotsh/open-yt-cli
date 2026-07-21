@@ -1,11 +1,10 @@
-// Package oauth implements Google's OAuth 2.0 loopback flow and token refresh
-// using only the Go standard library.
+// Package oauth wraps golang.org/x/oauth2 with Google's loopback redirect
+// flow, token revocation, and a self-persisting token source.
 package oauth
 
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -19,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/oauth2"
 )
 
 const (
@@ -47,7 +48,9 @@ type Config struct {
 	OpenBrowser      func(string) error
 	Out              io.Writer
 	Timeout          time.Duration
-	Now              func() time.Time
+	// Now is used for local expiry checks; golang.org/x/oauth2 stamps
+	// token expiries with the real clock.
+	Now func() time.Time
 }
 
 type Error struct {
@@ -82,17 +85,9 @@ func Login(ctx context.Context, cfg Config) (Token, error) {
 	if err != nil {
 		return Token{}, err
 	}
-	verifier, err := randomString(64)
-	if err != nil {
-		return Token{}, err
-	}
-	challengeSum := sha256.Sum256([]byte(verifier))
-	challenge := base64.RawURLEncoding.EncodeToString(challengeSum[:])
+	verifier := oauth2.GenerateVerifier()
 	redirectURI := "http://" + listener.Addr().String()
-	authorizationURL, err := AuthorizationURL(cfg, redirectURI, state, challenge)
-	if err != nil {
-		return Token{}, err
-	}
+	authorizationURL := AuthorizationURL(cfg, redirectURI, state, verifier)
 
 	type callbackResult struct {
 		code string
@@ -174,49 +169,45 @@ func Login(ctx context.Context, cfg Config) (Token, error) {
 	return Exchange(loginCtx, cfg, callback.code, redirectURI, verifier)
 }
 
-func AuthorizationURL(cfg Config, redirectURI, state, challenge string) (string, error) {
+// AuthorizationURL builds the consent URL; verifier is the PKCE code verifier
+// whose S256 challenge is embedded.
+func AuthorizationURL(cfg Config, redirectURI, state, verifier string) string {
 	cfg = withDefaults(cfg)
-	target, err := url.Parse(cfg.AuthorizationURL)
-	if err != nil {
-		return "", fmt.Errorf("parse OAuth authorization endpoint: %w", err)
-	}
-	query := target.Query()
-	query.Set("client_id", cfg.ClientID)
-	query.Set("redirect_uri", redirectURI)
-	query.Set("response_type", "code")
-	query.Set("scope", strings.Join(cfg.Scopes, " "))
-	query.Set("state", state)
-	query.Set("code_challenge", challenge)
-	query.Set("code_challenge_method", "S256")
-	query.Set("access_type", "offline")
-	query.Set("prompt", "consent")
-	target.RawQuery = query.Encode()
-	return target.String(), nil
+	library := cfg.library()
+	library.RedirectURL = redirectURI
+	return library.AuthCodeURL(state,
+		oauth2.AccessTypeOffline,
+		oauth2.S256ChallengeOption(verifier),
+		// Force the consent screen so Google always returns a refresh
+		// token, not only on the first authorization.
+		oauth2.SetAuthURLParam("prompt", "consent"),
+	)
 }
 
 func Exchange(ctx context.Context, cfg Config, code, redirectURI, verifier string) (Token, error) {
-	values := url.Values{
-		"client_id":     {cfg.ClientID},
-		"client_secret": {cfg.ClientSecret},
-		"code":          {code},
-		"code_verifier": {verifier},
-		"grant_type":    {"authorization_code"},
-		"redirect_uri":  {redirectURI},
+	cfg = withDefaults(cfg)
+	library := cfg.library()
+	library.RedirectURL = redirectURI
+	token, err := library.Exchange(cfg.context(ctx), code, oauth2.VerifierOption(verifier))
+	if err != nil {
+		return Token{}, translateError(err, "request OAuth token")
 	}
-	return requestToken(ctx, cfg, values, Token{})
+	return fromLibrary(token, cfg, Token{}), nil
 }
 
 func Refresh(ctx context.Context, cfg Config, current Token) (Token, error) {
 	if strings.TrimSpace(current.RefreshToken) == "" {
 		return Token{}, errors.New("OAuth refresh token is missing; re-run 'oytc login --oauth'")
 	}
-	values := url.Values{
-		"client_id":     {cfg.ClientID},
-		"client_secret": {cfg.ClientSecret},
-		"grant_type":    {"refresh_token"},
-		"refresh_token": {current.RefreshToken},
+	cfg = withDefaults(cfg)
+	// A seed token with no access token forces TokenSource straight to the
+	// refresh_token grant.
+	seed := &oauth2.Token{RefreshToken: current.RefreshToken}
+	token, err := cfg.library().TokenSource(cfg.context(ctx), seed).Token()
+	if err != nil {
+		return Token{}, translateError(err, "refresh OAuth token")
 	}
-	return requestToken(ctx, cfg, values, current)
+	return fromLibrary(token, cfg, current), nil
 }
 
 func Revoke(ctx context.Context, cfg Config, token string) error {
@@ -274,44 +265,36 @@ func (s *TokenSource) AccessToken(ctx context.Context, forceRefresh bool) (strin
 	return updated.AccessToken, nil
 }
 
-func requestToken(ctx context.Context, cfg Config, values url.Values, current Token) (Token, error) {
-	cfg = withDefaults(cfg)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.TokenURL, strings.NewReader(values.Encode()))
-	if err != nil {
-		return Token{}, err
+func (c Config) library() *oauth2.Config {
+	return &oauth2.Config{
+		ClientID:     c.ClientID,
+		ClientSecret: c.ClientSecret,
+		Scopes:       c.Scopes,
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  c.AuthorizationURL,
+			TokenURL: c.TokenURL,
+			// Google accepts credentials in the POST body; pinning the
+			// style avoids the library's two-request auto-detection.
+			AuthStyle: oauth2.AuthStyleInParams,
+		},
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-	resp, err := cfg.HTTPClient.Do(req)
-	if err != nil {
-		return Token{}, fmt.Errorf("request OAuth token: %w", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	if err != nil {
-		return Token{}, fmt.Errorf("read OAuth token response: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Token{}, parseError(resp.StatusCode, body)
-	}
-	var response struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		ExpiresIn    int64  `json:"expires_in"`
-		Scope        string `json:"scope"`
-		TokenType    string `json:"token_type"`
-	}
-	if err := json.Unmarshal(body, &response); err != nil {
-		return Token{}, fmt.Errorf("decode OAuth token response: %w", err)
-	}
-	if strings.TrimSpace(response.AccessToken) == "" {
-		return Token{}, errors.New("OAuth token response did not include an access token")
-	}
-	refreshToken := response.RefreshToken
+}
+
+// context injects cfg.HTTPClient into the oauth2 library, which only accepts
+// a custom client via context.
+func (c Config) context(ctx context.Context) context.Context {
+	return context.WithValue(ctx, oauth2.HTTPClient, c.HTTPClient)
+}
+
+// fromLibrary converts an oauth2 token, inheriting the refresh token and
+// scopes from the previous token when a response omits them.
+func fromLibrary(token *oauth2.Token, cfg Config, current Token) Token {
+	refreshToken := token.RefreshToken
 	if refreshToken == "" {
 		refreshToken = current.RefreshToken
 	}
-	scopes := strings.Fields(response.Scope)
+	granted, _ := token.Extra("scope").(string)
+	scopes := strings.Fields(granted)
 	if len(scopes) == 0 {
 		if len(current.Scopes) > 0 {
 			scopes = append([]string(nil), current.Scopes...)
@@ -320,11 +303,34 @@ func requestToken(ctx context.Context, cfg Config, values url.Values, current To
 		}
 	}
 	return Token{
-		AccessToken:  response.AccessToken,
+		AccessToken:  token.AccessToken,
 		RefreshToken: refreshToken,
-		Expiry:       cfg.Now().Add(time.Duration(response.ExpiresIn) * time.Second),
+		Expiry:       token.Expiry,
 		Scopes:       scopes,
-	}, nil
+	}
+}
+
+// translateError maps the library's *oauth2.RetrieveError onto *Error so the
+// CLI's exit-code and re-login-hint logic keeps working.
+func translateError(err error, action string) error {
+	var retrieve *oauth2.RetrieveError
+	if !errors.As(err, &retrieve) {
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			return fmt.Errorf("%s: %w", action, urlErr.Err)
+		}
+		return err
+	}
+	status := 0
+	if retrieve.Response != nil {
+		status = retrieve.Response.StatusCode
+	}
+	if retrieve.ErrorCode != "" {
+		return &Error{HTTPStatus: status, Code: retrieve.ErrorCode, Description: retrieve.ErrorDescription}
+	}
+	// The library only parses RFC 6749 fields for JSON/form content types;
+	// fall back to parsing the body directly.
+	return parseError(status, retrieve.Body)
 }
 
 func parseError(status int, body []byte) error {

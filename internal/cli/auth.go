@@ -18,18 +18,16 @@ import (
 )
 
 const (
-	// youtubeReadonlyScope is reserved for future mine=true Data API reads.
-	// It is NOT requested: Google classifies it as sensitive, and unverified
-	// apps requesting sensitive scopes are hard-blocked for accounts with
-	// Advanced Protection or restrictive Workspace policies.
 	youtubeReadonlyScope   = "https://www.googleapis.com/auth/youtube.readonly"
 	analyticsReadonlyScope = "https://www.googleapis.com/auth/yt-analytics.readonly"
 )
 
-// oauthScopes requests only what analytics commands need.
-// yt-analytics.readonly is classified non-sensitive, so consent works even
-// for unverified apps on protected accounts.
-var oauthScopes = []string{analyticsReadonlyScope}
+// oauthScopes covers Analytics reports plus read-only Data API access, so an
+// OAuth-only setup (no API key) can run every public-data command too.
+// Caveat: youtube.readonly is classified sensitive; unverified apps requesting
+// it are hard-blocked for accounts with Advanced Protection or restrictive
+// Workspace policies. Such accounts must verify the consent app first.
+var oauthScopes = []string{analyticsReadonlyScope, youtubeReadonlyScope}
 
 func (a *App) authenticationCommands() []*cobra.Command {
 	var useOAuth bool

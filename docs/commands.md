@@ -97,8 +97,9 @@ some-secret-manager get yt | oytc login   # piped
 If `OYTC_API_KEY` is set, `login` still saves the file but notes that the environment
 variable remains the active, higher-precedence credential.
 
-`oytc login --oauth` runs a PKCE-protected loopback-browser flow and requests only
-`yt-analytics.readonly` (non-sensitive, so protected accounts can still consent). It prints the authorization URL as a
+`oytc login --oauth` runs a PKCE-protected loopback-browser flow and requests the
+read-only `yt-analytics.readonly` and `youtube.readonly` scopes (the latter is sensitive;
+see [OAuth setup](oauth.md) for the unverified-app caveat). It prints the authorization URL as a
 headless fallback, stores access/refresh tokens in the same protected file, and preserves
 an existing API key. Client credentials come from `OYTC_OAUTH_CLIENT_ID` and
 `OYTC_OAUTH_CLIENT_SECRET` when set; missing values are prompted (the secret without echo).

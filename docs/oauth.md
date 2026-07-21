@@ -1,15 +1,20 @@
 # OAuth setup for YouTube Analytics
 
 `oytc analytics` needs authorization from the owner of the channel being reported. The CLI
-uses Google's OAuth 2.0 loopback flow with PKCE and requests only one read-only scope:
+uses Google's OAuth 2.0 loopback flow with PKCE and requests two read-only scopes:
 
-- `https://www.googleapis.com/auth/yt-analytics.readonly`
+- `https://www.googleapis.com/auth/yt-analytics.readonly` — Analytics reports
+- `https://www.googleapis.com/auth/youtube.readonly` — Data API reads, so public-data
+  commands also work through OAuth when no API key is configured
 
-Google classifies that scope as **non-sensitive**, so consent works even on accounts that
-hard-block unverified apps requesting sensitive scopes (Advanced Protection, restrictive
-Workspace policies). `oytc` deliberately does not request `youtube.readonly` (sensitive);
-it has no write commands and does not request upload, moderation, revenue, or content-owner
-scopes.
+`oytc` has no write commands and does not request upload, moderation, revenue, or
+content-owner scopes.
+
+**Sensitive-scope caveat:** Google classifies `youtube.readonly` as **sensitive**.
+Accounts with Advanced Protection or restrictive Workspace policies hard-block (not just
+warn) unverified apps requesting sensitive scopes — consent fails with "This app is
+blocked". If that affects you, either complete Google's app verification for your consent
+app, or authorize from an account without those restrictions.
 
 ## 1. Create or select a Google Cloud project
 
@@ -35,12 +40,11 @@ this **OAuth consent screen**):
 1. Create an app registration and supply the required app name and contact addresses.
 2. Choose **External** unless every account that will authorize belongs to one Google
    Workspace organization that you control.
-3. Add this scope under **Data Access**:
+3. Add these scopes under **Data Access**:
    - `.../auth/yt-analytics.readonly`
-
-   Do not add `.../auth/youtube.readonly`: it is classified sensitive, and unverified apps
-   requesting sensitive scopes are hard-blocked (not just warned) for accounts with
-   Advanced Protection or restrictive Workspace policies.
+   - `.../auth/youtube.readonly` (sensitive — see the caveat above; unverified apps
+     requesting it are hard-blocked for Advanced Protection and restrictive Workspace
+     accounts)
 4. While the app is in **Testing**, add each authorizing Google account as a test user.
 5. When ready, publish the app to **Production**.
 
@@ -50,10 +54,11 @@ publicly writable or broaden its scopes; it changes the consent app's publishing
 
 ### Unverified-app warning and user cap
 
-`yt-analytics.readonly` is classified non-sensitive, so most accounts see a plain consent
-screen with no warning. If Google still shows a **“Google hasn't verified this app”**
-interstitial, use the warning's advanced path to continue (for an app you created and
-trust) and inspect the requested scopes before approving.
+Because `youtube.readonly` is a sensitive scope, an unverified app will show a
+**“Google hasn't verified this app”** interstitial on most accounts. For an app you
+created and trust, use the warning's advanced path to continue, and inspect the requested
+scopes before approving. Accounts with Advanced Protection or restrictive Workspace
+policies cannot bypass this warning — they are hard-blocked until the app is verified.
 
 An unverified External app is generally limited to 100 users over the lifetime of the
 Google Cloud project (the cap is project-wide, not per client ID, and cannot be reset).

@@ -68,7 +68,9 @@ func TestOAuthLoginLoopbackSavesWithoutClobberingAPIKey(t *testing.T) {
 		if r.Form.Get("code") != "login-code" || r.Form.Get("client_secret") != "desktop-secret" {
 			t.Errorf("token form = %v", r.Form)
 		}
-		_, _ = w.Write([]byte(`{"access_token":"access-secret","refresh_token":"refresh-secret","expires_in":3600,"scope":"https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly"}`))
+		// x/oauth2 parses token responses by Content-Type.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"access-secret","refresh_token":"refresh-secret","expires_in":3600,"token_type":"Bearer","scope":"https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly"}`))
 	}))
 	defer server.Close()
 	app, out, _ := testApp(server)

@@ -16,9 +16,9 @@ is authoritative for the installed version. This file is a condensed matrix.
 Resource commands: `--parts` (API parts), `--fields` (Google partial-response selector),
 sometimes `--hl` (localization).
 
-Public list commands use an API key: `--page-size N`, `--page-token T`, `--all`,
-`--limit N`. Analytics commands require OAuth (the default OAuth grant covers only
-analytics, not public Data API reads).
+Public list commands use an API key (or fall back to an OAuth grant that includes
+`youtube.readonly`): `--page-size N`, `--page-token T`, `--all`, `--limit N`. Analytics
+commands always require OAuth.
 
 ## Commands
 

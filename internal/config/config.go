@@ -128,18 +128,37 @@ func Save(key string) (string, error) {
 }
 
 func SaveOAuth(credentials OAuthCredentials) (string, error) {
-	credentials.ClientID = strings.TrimSpace(credentials.ClientID)
-	credentials.ClientSecret = strings.TrimSpace(credentials.ClientSecret)
-	credentials.AccessToken = strings.TrimSpace(credentials.AccessToken)
-	credentials.RefreshToken = strings.TrimSpace(credentials.RefreshToken)
-	credentials.Expiry = strings.TrimSpace(credentials.Expiry)
-	if credentials.ClientID == "" || credentials.ClientSecret == "" {
-		return "", errors.New("OAuth client ID and client secret cannot be empty")
-	}
-	if credentials.AccessToken == "" && credentials.RefreshToken == "" {
-		return "", errors.New("OAuth access token or refresh token is required")
+	if err := normalizeOAuth(&credentials); err != nil {
+		return "", err
 	}
 	return updateFile(func(file *File) { file.OAuth = cloneOAuth(&credentials) })
+}
+
+// SaveRefreshedOAuth persists a token refresh only if the stored authorization
+// is still the one that was refreshed. This prevents a refresh that began
+// before logout (or a new login) from restoring obsolete credentials.
+func SaveRefreshedOAuth(expected, credentials OAuthCredentials) (bool, error) {
+	if err := normalizeOAuth(&credentials); err != nil {
+		return false, err
+	}
+	path, err := Path()
+	if err != nil {
+		return false, err
+	}
+	unlock, err := acquireUpdateLock(path)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	file, _, err := loadFile(path)
+	if err != nil {
+		return false, err
+	}
+	if !sameOAuth(file.OAuth, &expected) {
+		return false, nil
+	}
+	_, err = saveFile(path, File{APIKey: file.APIKey, OAuth: cloneOAuth(&credentials)})
+	return err == nil, err
 }
 
 func ClearAPIKey() (string, error) {
@@ -283,6 +302,36 @@ func saveFile(path string, file File) (string, error) {
 	}
 	_ = os.Chmod(path, 0o600)
 	return path, nil
+}
+
+func normalizeOAuth(credentials *OAuthCredentials) error {
+	credentials.ClientID = strings.TrimSpace(credentials.ClientID)
+	credentials.ClientSecret = strings.TrimSpace(credentials.ClientSecret)
+	credentials.AccessToken = strings.TrimSpace(credentials.AccessToken)
+	credentials.RefreshToken = strings.TrimSpace(credentials.RefreshToken)
+	credentials.Expiry = strings.TrimSpace(credentials.Expiry)
+	if credentials.ClientID == "" || credentials.ClientSecret == "" {
+		return errors.New("OAuth client ID and client secret cannot be empty")
+	}
+	if credentials.AccessToken == "" && credentials.RefreshToken == "" {
+		return errors.New("OAuth access token or refresh token is required")
+	}
+	return nil
+}
+
+func sameOAuth(left, right *OAuthCredentials) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	if left.ClientID != right.ClientID || left.ClientSecret != right.ClientSecret || left.AccessToken != right.AccessToken || left.RefreshToken != right.RefreshToken || left.Expiry != right.Expiry || len(left.Scopes) != len(right.Scopes) {
+		return false
+	}
+	for i, scope := range left.Scopes {
+		if scope != right.Scopes[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func cloneOAuth(credentials *OAuthCredentials) *OAuthCredentials {

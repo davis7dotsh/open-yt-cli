@@ -196,8 +196,7 @@ func (a *App) runStatus(cmd *cobra.Command, check bool) error {
 }
 
 // checkOAuth validates the stored OAuth authorization against the Analytics
-// API, which matches the scopes oytc actually requests (a Data API call would
-// need youtube.readonly).
+// API, which is the service analytics commands require.
 func (a *App) checkOAuth(ctx context.Context, stored *config.OAuthCredentials) error {
 	source, err := a.oauthTokenSource(stored)
 	if err != nil {
@@ -292,6 +291,8 @@ func (a *App) oauthTokenSource(credentials *config.OAuthCredentials) (*oauth.Tok
 	if err != nil {
 		return nil, err
 	}
+	persisted := *credentials
+	persisted.Scopes = append([]string(nil), credentials.Scopes...)
 	clientID, clientSecret := credentials.ClientID, credentials.ClientSecret
 	source := &oauth.TokenSource{
 		Config: a.oauthConfig(clientID, clientSecret),
@@ -303,7 +304,11 @@ func (a *App) oauthTokenSource(credentials *config.OAuthCredentials) (*oauth.Tok
 		},
 	}
 	source.OnUpdate = func(token oauth.Token) error {
-		_, err := config.SaveOAuth(storedOAuth(clientID, clientSecret, token))
+		updated := storedOAuth(clientID, clientSecret, token)
+		saved, err := config.SaveRefreshedOAuth(persisted, updated)
+		if saved {
+			persisted = updated
+		}
 		return err
 	}
 	return source, nil

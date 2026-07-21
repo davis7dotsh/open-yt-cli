@@ -146,6 +146,38 @@ func TestConcurrentUpdatesAreNotLost(t *testing.T) {
 	}
 }
 
+func TestRefreshedOAuthDoesNotRestoreRemovedCredentials(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "")
+	initial := OAuthCredentials{
+		ClientID: "id", ClientSecret: "secret", AccessToken: "old-access",
+		RefreshToken: "refresh", Expiry: "2026-02-01T12:00:00Z", Scopes: []string{"scope"},
+	}
+	if _, err := SaveOAuth(initial); err != nil {
+		t.Fatal(err)
+	}
+	if _, removed, err := Remove(); err != nil || !removed {
+		t.Fatalf("Remove() = %t, %v", removed, err)
+	}
+	updated := initial
+	updated.AccessToken = "new-access"
+	updated.Expiry = "2026-02-01T13:00:00Z"
+	saved, err := SaveRefreshedOAuth(initial, updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved {
+		t.Fatal("stale refresh restored credentials after logout")
+	}
+	path, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("credentials file exists after logout: %v", err)
+	}
+}
+
 func TestLoadFallsBackToEnvironmentKeyWhenFileCorrupt(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("OYTC_CONFIG_DIR", dir)

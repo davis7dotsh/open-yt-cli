@@ -29,8 +29,8 @@ In **APIs & Services → Library**, enable:
 1. **YouTube Data API v3**
 2. **YouTube Analytics API**
 
-The Data API is used to validate the read-only OAuth credential; the Analytics API serves
-reports.
+The Data API serves public-data commands through OAuth; the Analytics API validates the
+OAuth credential and serves reports.
 
 ## 3. Configure the OAuth consent screen
 
@@ -60,11 +60,11 @@ created and trust, use the warning's advanced path to continue, and inspect the 
 scopes before approving. Accounts with Advanced Protection or restrictive Workspace
 policies cannot bypass this warning — they are hard-blocked until the app is verified.
 
-An unverified External app is generally limited to 100 users over the lifetime of the
-Google Cloud project (the cap is project-wide, not per client ID, and cannot be reset).
-That is normally sufficient for a personal Desktop client. Complete Google's verification
-process before distributing beyond that cap; do not ask users to share one person's
-client secret or tokens.
+An app that presents Google's unverified-app screen is generally limited to 100 new users
+over the lifetime of the Google Cloud project (the cap is project-wide, not per client ID,
+and cannot be reset). That is normally sufficient for a personal Desktop client. Complete
+Google's verification process before distributing beyond that cap; do not ask users to
+share one person's client secret or tokens.
 
 ## 4. Create a Desktop OAuth client
 
@@ -105,8 +105,8 @@ Paste the client ID at the normal prompt and the client secret at the no-echo pr
 
 `oytc` prints the authorization URL, attempts to open it in the default browser, and waits
 up to about three minutes on a random local loopback port. Sign in as the channel owner,
-review the read-only analytics scope, and approve. The browser then redirects only to the
-local listener. On success, `oytc` exchanges the one-time code using PKCE and stores the client
+review both requested read-only scopes (Analytics and Data API), and approve. The browser
+then redirects only to the local listener. On success, `oytc` exchanges the one-time code using PKCE and stores the client
 credentials and tokens in the protected `auth.json` file.
 
 No browser was opened? Copy the printed URL into a browser on the same machine where

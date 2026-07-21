@@ -166,7 +166,9 @@ func Login(ctx context.Context, cfg Config) (Token, error) {
 	if callback.err != nil {
 		return Token{}, callback.err
 	}
-	return Exchange(loginCtx, cfg, callback.code, redirectURI, verifier)
+	// The callback timeout applies only while waiting for the browser. Give the
+	// token exchange the caller's context instead of its leftover duration.
+	return Exchange(ctx, cfg, callback.code, redirectURI, verifier)
 }
 
 // AuthorizationURL builds the consent URL; verifier is the PKCE code verifier

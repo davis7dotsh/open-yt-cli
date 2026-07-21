@@ -6,12 +6,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 
 	"open-yt-cli/internal/config"
+	"open-yt-cli/internal/youtube"
 )
 
 func TestLoginValidatesAndAtomicallySaves(t *testing.T) {
@@ -44,6 +46,172 @@ func TestLoginValidatesAndAtomicallySaves(t *testing.T) {
 	}
 	if bytes.Contains(out.Bytes(), []byte("login-secret")) {
 		t.Fatalf("key leaked in output: %s", out.String())
+	}
+}
+
+func TestOAuthLoginLoopbackSavesWithoutClobberingAPIKey(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OYTC_CONFIG_DIR", dir)
+	t.Setenv("OYTC_API_KEY", "")
+	t.Setenv("OYTC_OAUTH_CLIENT_ID", "desktop-id")
+	t.Setenv("OYTC_OAUTH_CLIENT_SECRET", "desktop-secret")
+	if _, err := config.Save("existing-key"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/token" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Error(err)
+		}
+		if r.Form.Get("code") != "login-code" || r.Form.Get("client_secret") != "desktop-secret" {
+			t.Errorf("token form = %v", r.Form)
+		}
+		// x/oauth2 parses token responses by Content-Type.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"access-secret","refresh_token":"refresh-secret","expires_in":3600,"token_type":"Bearer","scope":"https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly"}`))
+	}))
+	defer server.Close()
+	app, out, _ := testApp(server)
+	app.OpenBrowser = func(target string) error {
+		parsed, err := url.Parse(target)
+		if err != nil {
+			return err
+		}
+		callback := parsed.Query().Get("redirect_uri") + "?code=login-code&state=" + url.QueryEscape(parsed.Query().Get("state"))
+		go func() {
+			request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, callback, nil)
+			if err != nil {
+				return
+			}
+			if response, err := http.DefaultClient.Do(request); err == nil {
+				response.Body.Close()
+			}
+		}()
+		return nil
+	}
+	if err := execute(t, app, "login", "--oauth"); err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credentials.Key != "existing-key" || credentials.OAuth == nil || credentials.OAuth.RefreshToken != "refresh-secret" {
+		t.Fatalf("credentials = %#v", credentials)
+	}
+	for _, secret := range []string{"desktop-secret", "access-secret", "refresh-secret"} {
+		if bytes.Contains(out.Bytes(), []byte(secret)) {
+			t.Fatalf("OAuth secret leaked in output: %s", out.String())
+		}
+	}
+}
+
+func TestAnalyticsCommands(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "")
+	if _, err := config.SaveOAuth(config.OAuthCredentials{
+		ClientID: "id", ClientSecret: "secret", AccessToken: "oauth-access", RefreshToken: "oauth-refresh",
+		Expiry: "2099-01-01T00:00:00Z", Scopes: []string{youtubeReadonlyScope, analyticsReadonlyScope},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name       string
+		args       []string
+		metrics    string
+		dimensions string
+		filters    string
+	}{
+		{"report", []string{"analytics", "report", "--metrics", "views,likes", "--dimensions", "day"}, "views,likes", "day", ""},
+		{"overview", []string{"analytics", "overview", "--by", "month"}, "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained", "month", ""},
+		{"video", []string{"analytics", "video", "video-id"}, "views,estimatedMinutesWatched,averageViewDuration,likes,comments,subscribersGained", "", "video==video-id"},
+		{"traffic", []string{"analytics", "traffic-sources"}, "views,estimatedMinutesWatched", "insightTrafficSourceType", ""},
+		{"demographics", []string{"analytics", "demographics"}, "viewerPercentage", "ageGroup,gender", ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/youtubeanalytics/v2/reports" || r.Header.Get("Authorization") != "Bearer oauth-access" {
+					t.Errorf("request = %s, authorization = %q", r.URL.Path, r.Header.Get("Authorization"))
+				}
+				query := r.URL.Query()
+				if query.Get("ids") != "channel==MINE" || query.Get("metrics") != test.metrics || query.Get("dimensions") != test.dimensions || query.Get("filters") != test.filters {
+					t.Errorf("query = %s", r.URL.RawQuery)
+				}
+				_, _ = w.Write([]byte(`{"columnHeaders":[{"name":"views"}],"rows":[[42]]}`))
+			}))
+			defer server.Close()
+			app, out, _ := testApp(server)
+			args := append(append([]string(nil), test.args...), "--start", "2026-01-01", "--end", "2026-01-28", "--format", "json")
+			if err := execute(t, app, args...); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(out.Bytes(), []byte(`"views": 42`)) {
+				t.Fatalf("output = %s", out.String())
+			}
+		})
+	}
+}
+
+func TestAnalyticsRequiresOAuthAndValidDates(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "")
+	app, _, _ := testApp(nil)
+	err := execute(t, app, "analytics", "report", "--metrics", "views", "--start", "not-a-date")
+	var usage *UsageError
+	if !errors.As(err, &usage) {
+		t.Fatalf("expected UsageError, got %T: %v", err, err)
+	}
+	err = execute(t, app, "analytics", "report", "--metrics", "views", "--start", "2026-01-01", "--end", "2026-01-28")
+	if !errors.Is(err, youtube.ErrMissingOAuth) || !bytes.Contains([]byte(err.Error()), []byte("login --oauth")) {
+		t.Fatalf("expected missing OAuth hint, got %T: %v", err, err)
+	}
+}
+
+func TestStatusHidesOAuthSecretsAndLogoutRevokes(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "")
+	if _, err := config.SaveOAuth(config.OAuthCredentials{
+		ClientID: "visible-client-id", ClientSecret: "hidden-client-secret", AccessToken: "hidden-access-token",
+		RefreshToken: "hidden-refresh-token", Expiry: "2099-01-01T00:00:00Z", Scopes: []string{analyticsReadonlyScope},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var revoked string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/revoke" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Error(err)
+		}
+		revoked = r.Form.Get("token")
+	}))
+	defer server.Close()
+	app, out, _ := testApp(server)
+	if err := execute(t, app, "status", "--format", "json"); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out.Bytes(), []byte("visible-client-id")) {
+		t.Fatalf("status omitted client ID: %s", out.String())
+	}
+	for _, secret := range []string{"hidden-client-secret", "hidden-access-token", "hidden-refresh-token"} {
+		if bytes.Contains(out.Bytes(), []byte(secret)) {
+			t.Fatalf("status leaked OAuth secret: %s", out.String())
+		}
+	}
+	app, _, _ = testApp(server)
+	if err := execute(t, app, "logout"); err != nil {
+		t.Fatal(err)
+	}
+	if revoked != "hidden-refresh-token" {
+		t.Fatalf("revoked token = %q", revoked)
+	}
+	credentials, err := config.Load()
+	if err != nil || credentials.OAuth != nil {
+		t.Fatalf("credentials after logout = %#v, %v", credentials, err)
 	}
 }
 
@@ -217,6 +385,10 @@ func testApp(server *httptest.Server) (*App, *bytes.Buffer, *bytes.Buffer) {
 	app.Err = errOut
 	if server != nil {
 		app.BaseURL = server.URL + "/youtube/v3"
+		app.AnalyticsBaseURL = server.URL + "/youtubeanalytics/v2"
+		app.OAuthAuthURL = server.URL + "/authorize"
+		app.OAuthTokenURL = server.URL + "/token"
+		app.OAuthRevokeURL = server.URL + "/revoke"
 		app.HTTPClient = server.Client()
 	}
 	app.IsOutputTTY = false

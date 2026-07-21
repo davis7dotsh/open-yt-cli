@@ -16,12 +16,19 @@ is authoritative for the installed version. This file is a condensed matrix.
 Resource commands: `--parts` (API parts), `--fields` (Google partial-response selector),
 sometimes `--hl` (localization).
 
-List commands: `--page-size N`, `--page-token T`, `--all`, `--limit N`.
+Public list commands use an API key (or fall back to an OAuth grant that includes
+`youtube.readonly`): `--page-size N`, `--page-token T`, `--all`, `--limit N`. Analytics
+commands always require OAuth.
 
 ## Commands
 
 | Command | Required input | Key flags |
 | --- | --- | --- |
+| `analytics report` **(OAuth)** | `--metrics CSV` | `--dimensions`, `--start/--end` (YYYY-MM-DD), `--filters`, `--sort`, `--limit` (1–200) |
+| `analytics overview` **(OAuth)** | — | `--by day\|month`, date/filter/sort/limit flags |
+| `analytics video <ID>` **(OAuth)** | owned video ID | core metrics; applies `video==ID`; date/filter/sort/limit flags |
+| `analytics traffic-sources` **(OAuth)** | — | groups views/watch time by traffic source |
+| `analytics demographics` **(OAuth)** | — | groups viewer percentage by age and gender |
 | `search [QUERY]` | — | `--type video,channel,playlist`, `--channel`, `--order`, `--published-after/-before` (RFC3339), `--region`, `--language`, `--safe-search`, `--event-type` (video), `--video-duration/-caption/-category/…`, `--location`+`--location-radius`, `--topic` |
 | `channel get <REF>...` | UC… ID, @handle, or channel URL | `--parts` (no `auditDetails`/`contentOwnerDetails`) |
 | `channel activities <CHANNEL>` | channel ref | `--published-after/-before` |
@@ -41,7 +48,9 @@ List commands: `--page-size N`, `--page-token T`, `--all`, `--limit N`.
 | `live-chat stream` | one of `--video`/`--chat-id` | JSONL default, `--limit`, `--page-token`; REST polling, respects `pollingIntervalMillis`, dedupes IDs, exits when chat ends |
 | `category list` | one of `--region`/`--id` | |
 | `language list` / `region list` | — | |
-| `status [--check]` | — | local-only unless `--check` |
+| `login [--oauth]` | API key, or Desktop OAuth client | no flag = API key; `--oauth` = loopback PKCE analytics authorization |
+| `status [--check]` | — | shows both credential types; local-only unless `--check` |
+| `logout` | — | best-effort OAuth revoke, then removes stored credentials |
 | `skills install` | confirmation | installs this bundled skill to `~/.agents/skills/oytc` |
 | `version` | — | version/commit/date/platform |
 | `update [--check] [--version vX.Y.Z]` | — | self-update; alias `upgrade` |
@@ -56,5 +65,5 @@ JSONL: one item object per line, no envelope. Numeric counters are strings.
 
 ## Exit codes
 
-0 success · 2 usage · 3 credentials · 4 not found/forbidden · 5 quota/rate limit ·
-6 network/transient · 130 interrupted.
+0 success · 2 usage · 3 API-key/OAuth credentials · 4 not found/forbidden ·
+5 quota/rate limit · 6 network/transient · 130 interrupted.

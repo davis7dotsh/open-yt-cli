@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"open-yt-cli/internal/cli"
+	"open-yt-cli/internal/oauth"
 	"open-yt-cli/internal/youtube"
 )
 
@@ -42,6 +43,14 @@ func TestExitCodes(t *testing.T) {
 		{"usage", &cli.UsageError{Message: "bad flag"}, 2},
 		{"unknown command", errors.New(`unknown command "wat"`), 2},
 		{"missing key", youtube.ErrMissingKey, 3},
+		{"missing OAuth", youtube.ErrMissingOAuth, 3},
+		{"invalid OAuth grant", &oauth.Error{HTTPStatus: 400, Code: "invalid_grant"}, 3},
+		{"unlisted OAuth code", &oauth.Error{HTTPStatus: 400, Code: "invalid_scope"}, 3},
+		{"codeless OAuth error", &oauth.Error{HTTPStatus: 400}, 3},
+		{"transient OAuth error", &oauth.Error{HTTPStatus: 503, Code: "temporarily_unavailable"}, 6},
+		{"OAuth server error", &oauth.Error{HTTPStatus: 500, Code: "server_error"}, 6},
+		{"OAuth rate limited", &oauth.Error{HTTPStatus: 429}, 5},
+		{"insufficient OAuth permissions", &youtube.APIError{HTTPStatus: 403, Code: 403, Reasons: []string{"insufficientPermissions"}}, 3},
 		{"invalid key camel case", &youtube.APIError{HTTPStatus: 400, Code: 400, Reasons: []string{"keyInvalid"}}, 3},
 		{"invalid key uppercase underscore", &youtube.APIError{HTTPStatus: 400, Code: 400, Reasons: []string{"badRequest", "API_KEY_INVALID"}}, 3},
 		{"API not enabled", &youtube.APIError{HTTPStatus: 403, Code: 403, Reasons: []string{"accessNotConfigured"}}, 3},

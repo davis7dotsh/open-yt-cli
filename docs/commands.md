@@ -1,14 +1,17 @@
 # oytc command reference
 
-`oytc` is an API-key-only CLI for public YouTube Data API v3 resources. It never performs
-OAuth and never exposes private-account operations. This page documents every command,
-the shared flags, output formats, pagination, configuration, and error behavior.
+`oytc` is a read-only CLI for public YouTube Data API v3 resources and the authorized
+user's YouTube Analytics. Public-data commands use an API key; analytics commands require
+OAuth. (The default OAuth grant covers only analytics — it is used for public reads only
+when it also includes the YouTube Data read-only scope.) This page documents every
+command, shared flags, output formats, pagination, configuration, and error behavior.
 
 Help output is always authoritative: run `oytc --help`, `oytc <command> --help`, or
 `oytc <command> <subcommand> --help` for the flags supported by your installed version.
 
 - [Command tree](#command-tree)
 - [Authentication commands](#authentication-commands)
+- [Analytics](#analytics)
 - [Search](#search)
 - [Channels](#channels)
 - [Videos](#videos)
@@ -23,14 +26,20 @@ Help output is always authoritative: run `oytc --help`, `oytc <command> --help`,
 - [Pagination and quota](#pagination-and-quota)
 - [Configuration and precedence](#configuration-and-precedence)
 - [Errors and exit codes](#errors-and-exit-codes)
-- [Public-data limitations](#public-data-limitations)
+- [Read-only limitations](#read-only-limitations)
 
 ## Command tree
 
 ```text
-oytc login
+oytc login [--oauth]
 oytc status [--check]
 oytc logout
+
+oytc analytics report --metrics <CSV>
+oytc analytics overview [--by day|month]
+oytc analytics video <VIDEO_ID>
+oytc analytics traffic-sources
+oytc analytics demographics
 
 oytc search [QUERY]
 
@@ -72,12 +81,13 @@ oytc update [--check] [--version vX.Y.Z]     # `oytc upgrade` is an alias
 
 ## Authentication commands
 
-### `oytc login`
+### `oytc login [--oauth]`
 
-Prompts for a YouTube Data API key without terminal echo, validates it with a cheap
-`i18nLanguages.list` call, and atomically writes it as JSON to the config path. A key can
-also be piped on standard input for non-interactive secret injection; there is deliberately
-no `--api-key` flag, so the key never appears in shell history or the process table.
+Without flags, prompts for a YouTube Data API key without terminal echo, validates it with
+a cheap `i18nLanguages.list` call, and atomically writes it as JSON to the config path. A
+key can also be piped on standard input for non-interactive secret injection; there is
+deliberately no `--api-key` flag, so the key never appears in shell history or the process
+table.
 
 ```sh
 oytc login                       # interactive
@@ -87,15 +97,78 @@ some-secret-manager get yt | oytc login   # piped
 If `OYTC_API_KEY` is set, `login` still saves the file but notes that the environment
 variable remains the active, higher-precedence credential.
 
+`oytc login --oauth` runs a PKCE-protected loopback-browser flow and requests the
+read-only `yt-analytics.readonly` and `youtube.readonly` scopes (the latter is sensitive;
+see [OAuth setup](oauth.md) for the unverified-app caveat). It prints the authorization URL as a
+headless fallback, stores access/refresh tokens in the same protected file, and preserves
+an existing API key. Client credentials come from `OYTC_OAUTH_CLIENT_ID` and
+`OYTC_OAUTH_CLIENT_SECRET` when set; missing values are prompted (the secret without echo).
+See [OAuth setup](oauth.md).
+
 ### `oytc status [--check]`
 
-Local-only by default: reports whether a key is configured, its source (`OYTC_API_KEY` or
-`auth.json`), the config path, and a short SHA-256 fingerprint — never the key itself.
-`--check` additionally validates the active key against the API.
+Local-only by default. It reports the API key's source and SHA-256 fingerprint and the
+OAuth client ID, granted scopes, and token expiry — never the key, tokens, or client secret.
+`--check` validates each configured credential and may refresh/persist an expiring OAuth
+token.
 
 ### `oytc logout`
 
-Idempotently removes the stored credential file and warns when `OYTC_API_KEY` is still set.
+Attempts to revoke the stored OAuth refresh token, continues if revocation fails, then
+idempotently removes the complete credential file. It warns when `OYTC_API_KEY` remains set.
+
+## Analytics
+
+All analytics commands query `ids=channel==MINE` and require `oytc login --oauth`. Dates
+are inclusive `YYYY-MM-DD`; both default to the last 28 complete UTC days (ending
+yesterday). Every command accepts:
+
+| Flag | Meaning |
+| --- | --- |
+| `--start YYYY-MM-DD` / `--end YYYY-MM-DD` | inclusive report range |
+| `--filters EXPR` | YouTube Analytics filter expression |
+| `--sort CSV` | sort fields, prefix descending fields with `-` |
+| `--limit N` | maximum rows, 1–200 (default 200; one Analytics API page) |
+
+Google's metric/dimension compatibility rules are authoritative. Incompatible combinations
+are returned verbatim as API errors.
+
+### `oytc analytics report`
+
+Raw report command. `--metrics CSV` is required; `--dimensions CSV` is optional.
+
+```sh
+oytc analytics report --metrics views,estimatedMinutesWatched \
+  --dimensions day --start 2026-01-01 --end 2026-01-31 --sort day --format json
+```
+
+### Preset reports
+
+```sh
+oytc analytics overview --by day --format table
+oytc analytics video VIDEO_ID --start 2026-01-01 --end 2026-01-31
+oytc analytics traffic-sources --sort=-views --format tsv
+oytc analytics demographics --format jsonl
+```
+
+- `overview` requests views, estimated watch minutes, average view duration, average view
+  percentage, and subscribers gained. `--by day|month` is optional. (Thumbnail impressions
+  and impression click-through rate are only available in YouTube Studio; the Analytics API
+  exposes no such metrics.)
+- `video <VIDEO_ID>` applies `video==VIDEO_ID` and requests core engagement/watch metrics.
+- `traffic-sources` groups views and estimated watch minutes by
+  `insightTrafficSourceType`.
+- `demographics` groups `viewerPercentage` by `ageGroup,gender`.
+
+Analytics' column-oriented response is normalized into ordinary objects, so all shared
+formats and `--columns` work unchanged. Example JSON envelope:
+
+```json
+{
+  "items": [{"day": "2026-01-01", "views": 42}],
+  "requests": 1
+}
+```
 
 ## Search
 
@@ -335,15 +408,19 @@ Quota: most list requests cost 1 unit against the default 10,000-unit daily quot
 | Linux/Unix | `${XDG_CONFIG_HOME:-~/.config}/oytc/auth.json` |
 | Windows | `%APPDATA%\oytc\auth.json` |
 
-Precedence (highest first):
+API-key precedence (highest first):
 
 1. `OYTC_API_KEY` environment variable
 2. `auth.json` in `OYTC_CONFIG_DIR` (if set)
 3. `auth.json` in the platform default directory
 
+`OYTC_OAUTH_CLIENT_ID` and `OYTC_OAUTH_CLIENT_SECRET` independently override stored client
+credentials only when bootstrapping `login --oauth`; authorized tokens are always read from
+`auth.json`. API-key and OAuth sections coexist and updates to one preserve the other.
+
 On POSIX systems the config directory is created `0700` and the file `0600` where the
-filesystem permits. REST credentials are sent in the `X-Goog-Api-Key` header, never in the
-URL, so keys do not leak into proxies' and servers' URL logs.
+filesystem permits. Keys use `X-Goog-Api-Key`; OAuth uses `Authorization: Bearer`. Neither
+secret is placed in request URLs.
 
 ## Errors and exit codes
 
@@ -353,7 +430,7 @@ Exit statuses are grouped for automation:
 | ---: | --- |
 | 0 | success |
 | 2 | usage/validation error |
-| 3 | missing or invalid credentials |
+| 3 | missing/invalid API key or OAuth authorization; re-run the indicated login |
 | 4 | resource unavailable / not found / forbidden |
 | 5 | quota or rate limit |
 | 6 | network, temporary upstream, config, or other operational failure |
@@ -363,10 +440,10 @@ Transient transport errors and HTTP 429/5xx responses are retried with bounded e
 backoff and `Retry-After` support. Google JSON errors are parsed into status, message, and
 reason without exposing the key.
 
-## Public-data limitations
+## Read-only limitations
 
-- API-key access only: private subscriptions, watch time, revenue, analytics, moderation,
-  ownership data, and all mutations are intentionally absent (they require OAuth).
+- OAuth is limited to read-only YouTube and Analytics scopes for the authorized channel.
+  Revenue/content-owner reports, uploads, moderation, and all mutations remain absent.
 - `/c/` custom channel URLs require a search and can resolve to the API's best match.
 - Live chat uses REST polling rather than the lower-latency official gRPC stream.
 - `--fields` is passed through verbatim, so excluding continuation metadata can

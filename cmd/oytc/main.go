@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"open-yt-cli/internal/cli"
+	"open-yt-cli/internal/oauth"
 	"open-yt-cli/internal/youtube"
 )
 
@@ -48,14 +49,30 @@ func exitCode(err error) int {
 	if errors.As(err, &usage) {
 		return 2
 	}
-	if errors.Is(err, youtube.ErrMissingKey) {
+	if errors.Is(err, youtube.ErrMissingKey) || errors.Is(err, youtube.ErrMissingOAuth) {
+		return 3
+	}
+	var oauthErr *oauth.Error
+	if errors.As(err, &oauthErr) {
+		// Every structured OAuth failure is an auth problem (exit 3)
+		// except clearly transient Google-side errors.
+		switch oauthErr.Code {
+		case "server_error", "temporarily_unavailable":
+			return 6
+		}
+		if oauthErr.HTTPStatus == 429 {
+			return 5
+		}
+		if oauthErr.HTTPStatus >= 500 {
+			return 6
+		}
 		return 3
 	}
 	var apiErr *youtube.APIError
 	if errors.As(err, &apiErr) {
 		reasons := strings.ToLower(strings.Join(apiErr.Reasons, ","))
 		normalizedReasons := strings.NewReplacer("_", "", "-", "").Replace(reasons)
-		if strings.Contains(normalizedReasons, "keyinvalid") || strings.Contains(normalizedReasons, "apikeyinvalid") || strings.Contains(normalizedReasons, "accessnotconfigured") || apiErr.HTTPStatus == 401 {
+		if strings.Contains(normalizedReasons, "keyinvalid") || strings.Contains(normalizedReasons, "apikeyinvalid") || strings.Contains(normalizedReasons, "accessnotconfigured") || strings.Contains(normalizedReasons, "insufficientpermissions") || apiErr.HTTPStatus == 401 {
 			return 3
 		}
 		if apiErr.HTTPStatus == 404 {
@@ -72,6 +89,9 @@ func exitCode(err error) int {
 		}
 	}
 	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "invalid_grant") || strings.Contains(message, "re-run 'oytc login --oauth'") {
+		return 3
+	}
 	if strings.Contains(message, "unknown command") || strings.Contains(message, "unknown flag") {
 		return 2
 	}

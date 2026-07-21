@@ -1,8 +1,9 @@
 # oytc — open YouTube CLI
 
-Read **public YouTube data** from the command line. `oytc` is a fast, scriptable client for
-the official YouTube Data API v3 that authenticates with an API key only — no OAuth, no
-private-account access, no writes.
+Read **public YouTube data and your own channel analytics** from the command line. `oytc`
+is a fast, scriptable, read-only client for the YouTube Data API v3 and YouTube Analytics
+API. API keys cover public data; OAuth 2.0 adds owner-authorized analytics. There are no
+write commands.
 
 **Website & install:** <https://davis7dotsh.github.io/open-yt-cli/>
 
@@ -22,12 +23,17 @@ From source (Go 1.26+): `go install ./cmd/oytc` from a clone, or `make build`.
 ## Quick start
 
 ```sh
-oytc login                                    # save an API key (prompts, no echo)
-oytc status --check                           # verify it against the API
+oytc login                                    # save an API key for public data
+oytc status --check                           # verify configured credentials
 oytc search "Go conference" --type video --limit 5
 oytc channel get @GoogleDevelopers
 oytc video stats dQw4w9WgXcQ --format json
 oytc playlist items PLxxxx --all --limit 250
+
+# Optional: authorize read-only access to your own channel analytics
+oytc login --oauth
+oytc analytics overview --by day --format json
+oytc analytics video YOUR_OWN_VIDEO_ID --start 2026-01-01 --end 2026-01-31   # must be your channel's video
 ```
 
 Output defaults to a compact table on a terminal and stable JSON when piped; `--format
@@ -45,7 +51,8 @@ table|json|jsonl|tsv` and `--columns` cover the rest.
 | `subscription` | Public channel subscriptions |
 | `live-chat` | Live chat, one page or continuous (REST polling fallback) |
 | `category` / `language` / `region` | YouTube metadata lists |
-| `login` / `status` / `logout` | Manage the locally stored API key |
+| `analytics` | OAuth-only reports, overview, video, traffic-source, and demographic analytics |
+| `login` / `status` / `logout` | Manage API-key and read-only OAuth credentials |
 | `skills install` | Confirm and install the bundled agent skill to `~/.agents/skills/oytc` |
 | `version` | Show version, commit, and build date |
 | `update` (alias `upgrade`) | Checksum-verified self-update from GitHub Releases |
@@ -65,26 +72,44 @@ Step-by-step guide with direct console URLs and restriction trade-offs:
 [docs/google-api-key.md](docs/google-api-key.md). For ephemeral use, `OYTC_API_KEY` takes
 precedence over the saved key.
 
+For analytics, follow [docs/oauth.md](docs/oauth.md), then run `oytc login --oauth`.
+`OYTC_OAUTH_CLIENT_ID` and `OYTC_OAUTH_CLIENT_SECRET` can bootstrap login non-interactively;
+otherwise `oytc` prompts for both (the secret without echo). OAuth requests two read-only
+scopes: `yt-analytics.readonly` (Analytics reports) and `youtube.readonly` (Data API reads,
+so public-data commands also work without an API key). Note that `youtube.readonly` is
+classified sensitive: accounts with Advanced Protection or restrictive Workspace policies
+hard-block unverified apps requesting it, so verify the consent app for those accounts.
+
 ## Security & config
 
-- The key is stored at `~/Library/Application Support/oytc/auth.json` (macOS),
-  `~/.config/oytc/auth.json` (Linux), or `%APPDATA%\oytc\auth.json` (Windows) — directory
-  `0700`, file `0600` where the filesystem permits. `OYTC_CONFIG_DIR` overrides the location.
-- Keys are sent in the `X-Goog-Api-Key` header, never in URLs.
-- `status` prints a SHA-256 fingerprint, never the key. `logout` removes the file.
-- `oytc update` verifies release checksums and never reads or transmits the API key.
+- API-key and OAuth credentials coexist in `auth.json` at
+  `~/Library/Application Support/oytc` (macOS), `~/.config/oytc` (Linux), or
+  `%APPDATA%\oytc` (Windows) — directory `0700`, file `0600` where supported.
+  `OYTC_CONFIG_DIR` overrides the location.
+- Keys use the `X-Goog-Api-Key` header; OAuth access tokens use `Authorization: Bearer`.
+  Neither is put in request URLs.
+- `status` shows a key fingerprint plus OAuth client ID, scopes, and expiry. It never prints
+  tokens or the client secret. `logout` attempts OAuth revocation, then removes the file.
+- `oytc update` verifies release checksums and never reads or transmits credentials.
 
-## Scope: public data only
+## Scope: read-only public data + your analytics
 
-`oytc` intentionally supports **only** what an API key can reach: public, read-only data.
-Private channel analytics (watch time, revenue, demographics), private playlists or
-subscriptions, moderation, and every write operation require OAuth and are out of scope.
-Live chat streaming uses documented REST polling, not the official gRPC stream.
+An API key remains sufficient for every public-data command. Optional OAuth 2.0 support is
+also strictly read-only and is used for **your authorized channel's YouTube Analytics**:
+views, watch time, retention, traffic sources, and audience demographics supported by
+Google's metric/dimension compatibility rules. (Thumbnail impressions and CTR are not in
+the Analytics API — those remain YouTube Studio-only.)
+
+There are still zero writes: uploads, edits, moderation, and mutations are out of scope.
+Revenue scopes/metrics, content-owner reports, and arbitrary private-account operations are
+not requested or supported. Live chat streaming uses documented REST polling, not the
+official gRPC stream.
 
 ## Documentation
 
 - [Command reference](docs/commands.md) — every command, flag, output format, exit code
 - [Google API key setup](docs/google-api-key.md) — deterministic click-by-click guide
+- [OAuth analytics setup](docs/oauth.md) — GCP consent screen and Desktop client setup
 - [Releasing](docs/releasing.md) — release procedure and required repo settings
 - [Agent skill](skills/oytc/SKILL.md) — using `oytc` from AI agents; install it with `oytc skills install`
 

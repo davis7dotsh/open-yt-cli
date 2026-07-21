@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -61,6 +62,139 @@ func TestSaveLoadRemoveAndModes(t *testing.T) {
 	_, removed, err = Remove()
 	if err != nil || removed {
 		t.Fatalf("idempotent Remove() = %t, %v", removed, err)
+	}
+}
+
+func TestAPIKeyAndOAuthCoexistAndUpdateIndependently(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "")
+	if _, err := Save("api-secret"); err != nil {
+		t.Fatal(err)
+	}
+	oauth := OAuthCredentials{
+		ClientID: "desktop-id", ClientSecret: "client-secret", AccessToken: "access-secret",
+		RefreshToken: "refresh-secret", Expiry: "2026-02-01T12:00:00Z", Scopes: []string{"scope.one", "scope.two"},
+	}
+	if _, err := SaveOAuth(oauth); err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credentials.Key != "api-secret" || credentials.OAuth == nil || credentials.OAuth.ClientID != "desktop-id" || credentials.OAuth.RefreshToken != "refresh-secret" {
+		t.Fatalf("coexisting credentials: %#v", credentials)
+	}
+	if _, err := Save("replacement-key"); err != nil {
+		t.Fatal(err)
+	}
+	credentials, err = Load()
+	if err != nil || credentials.OAuth == nil || credentials.OAuth.AccessToken != "access-secret" {
+		t.Fatalf("API-key update clobbered OAuth: %#v, %v", credentials, err)
+	}
+	if _, err := ClearOAuth(); err != nil {
+		t.Fatal(err)
+	}
+	credentials, err = Load()
+	if err != nil || credentials.Key != "replacement-key" || credentials.OAuth != nil {
+		t.Fatalf("OAuth clear clobbered API key: %#v, %v", credentials, err)
+	}
+}
+
+func TestOAuthBootstrapEnvironmentPrecedence(t *testing.T) {
+	t.Setenv("OYTC_OAUTH_CLIENT_ID", "environment-id")
+	t.Setenv("OYTC_OAUTH_CLIENT_SECRET", "environment-secret")
+	id, secret := OAuthBootstrap()
+	if id != "environment-id" || secret != "environment-secret" {
+		t.Fatalf("OAuthBootstrap() = %q, %q", id, secret)
+	}
+}
+
+func TestConcurrentUpdatesAreNotLost(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "")
+	oauth := OAuthCredentials{
+		ClientID: "id", ClientSecret: "secret", AccessToken: "access",
+		RefreshToken: "refresh", Expiry: "2026-02-01T12:00:00Z", Scopes: []string{"scope"},
+	}
+	var group sync.WaitGroup
+	errs := make(chan error, 2)
+	group.Add(2)
+	go func() {
+		defer group.Done()
+		_, err := Save("api-secret")
+		errs <- err
+	}()
+	go func() {
+		defer group.Done()
+		_, err := SaveOAuth(oauth)
+		errs <- err
+	}()
+	group.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	credentials, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credentials.Key != "api-secret" || credentials.OAuth == nil || credentials.OAuth.RefreshToken != "refresh" {
+		t.Fatalf("a concurrent update was lost: %#v", credentials)
+	}
+}
+
+func TestRefreshedOAuthDoesNotRestoreRemovedCredentials(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "")
+	initial := OAuthCredentials{
+		ClientID: "id", ClientSecret: "secret", AccessToken: "old-access",
+		RefreshToken: "refresh", Expiry: "2026-02-01T12:00:00Z", Scopes: []string{"scope"},
+	}
+	if _, err := SaveOAuth(initial); err != nil {
+		t.Fatal(err)
+	}
+	if _, removed, err := Remove(); err != nil || !removed {
+		t.Fatalf("Remove() = %t, %v", removed, err)
+	}
+	updated := initial
+	updated.AccessToken = "new-access"
+	updated.Expiry = "2026-02-01T13:00:00Z"
+	saved, err := SaveRefreshedOAuth(initial, updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved {
+		t.Fatal("stale refresh restored credentials after logout")
+	}
+	path, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("credentials file exists after logout: %v", err)
+	}
+}
+
+func TestLoadFallsBackToEnvironmentKeyWhenFileCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OYTC_CONFIG_DIR", dir)
+	t.Setenv("OYTC_API_KEY", "environment-secret")
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := Load()
+	if err != nil {
+		t.Fatalf("Load with corrupt file and env key: %v", err)
+	}
+	if credentials.Key != "environment-secret" || credentials.Source != "OYTC_API_KEY" {
+		t.Fatalf("credentials = %#v", credentials)
+	}
+	t.Setenv("OYTC_API_KEY", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected parse error without environment key")
 	}
 }
 

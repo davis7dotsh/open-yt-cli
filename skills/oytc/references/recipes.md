@@ -1,7 +1,8 @@
 # oytc recipes (agent reference)
 
-Practical patterns for common data-collection tasks. All examples assume a configured key
-(`oytc status --check` exits 0).
+Practical patterns for common data-collection tasks. Public-data examples assume an API
+key (`oytc login`); analytics examples require read-only OAuth (`oytc login --oauth`).
+`oytc status --check` validates both when configured.
 
 ## Resolve a channel and get its stats
 
@@ -55,6 +56,29 @@ oytc live-chat stream --video LIVE_VIDEO_ID --limit 200 --format jsonl
 Bounded by `--limit`; exits on its own when the chat ends. This is REST polling (documented
 fallback), so expect `pollingIntervalMillis`-paced batches, not per-message latency.
 
+## Analyze your authorized channel (OAuth)
+
+Authorize once, then request normalized JSON rows:
+
+```sh
+oytc login --oauth
+oytc analytics overview --by day --start 2026-01-01 --end 2026-01-31 --format json
+oytc analytics video VIDEO_ID --start 2026-01-01 --end 2026-01-31 --format json
+oytc analytics traffic-sources --sort=-views --format jsonl
+oytc analytics demographics --format json
+```
+
+For custom combinations:
+
+```sh
+oytc analytics report --metrics views,estimatedMinutesWatched \
+  --dimensions day --filters 'video==VIDEO_ID' --sort day --format json
+```
+
+Analytics always targets `channel==MINE`, accepts at most 200 rows per invocation, and
+passes Google's metric/dimension compatibility errors through. It cannot report revenue or
+another user's channel.
+
 ## Check AI-training permission for a video (no key, no quota)
 
 ```sh
@@ -63,6 +87,7 @@ oytc video trainability VIDEO_ID --format json
 
 ## Robust scripting
 
-- Check exit codes: retry only on 6, surface 3 (credentials) and 5 (quota) to the user.
+- Check exit codes: retry only on 6, surface 3 (run `login` or `login --oauth` as hinted)
+  and 5 (quota) to the user.
 - Resume long enumerations with the `nextPageToken` from the JSON envelope + `--page-token`.
 - Keep counter fields as strings; they can exceed float64-safe integers.

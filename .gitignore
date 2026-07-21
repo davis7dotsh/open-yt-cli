@@ -4,3 +4,6 @@
 *.test
 *.out
 .DS_Store
+
+# Local credentials (never commit)
+.env

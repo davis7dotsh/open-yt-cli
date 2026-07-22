@@ -42,10 +42,11 @@ func (a *App) channelGetCommand() *cobra.Command {
 				}
 				ids = append(ids, id)
 			}
-			result := youtube.ListResult{Requests: requests}
+			result := youtube.ListResult{Items: make([]map[string]any, 0), Requests: requests}
+			requestFields, preserveID := fieldsWithRequired(api.fields, "items/id")
 			for _, group := range batch(ids, 50) {
 				params := url.Values{"part": {parts}, "id": {strings.Join(group, ",")}}
-				setValues(params, map[string]string{"hl": api.hl, "fields": api.fields})
+				setValues(params, map[string]string{"hl": api.hl, "fields": requestFields})
 				response, err := client.Get(cmd.Context(), "channels", params)
 				if err != nil {
 					return err
@@ -53,6 +54,10 @@ func (a *App) channelGetCommand() *cobra.Command {
 				result.Requests++
 				result.Items = append(result.Items, response.Items...)
 			}
+			if err := validateRequestedItems("channels", ids, result.Items); err != nil {
+				return err
+			}
+			stripItemIDs(result.Items, preserveID)
 			return a.renderResult(result, []string{"id", "snippet.title", "statistics.subscriberCount", "statistics.videoCount", "statistics.viewCount"})
 		},
 	}
@@ -208,10 +213,11 @@ func (a *App) videoGetCommand(stats bool) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result := youtube.ListResult{}
+			result := youtube.ListResult{Items: make([]map[string]any, 0)}
+			requestFields, preserveID := fieldsWithRequired(api.fields, "items/id")
 			for _, group := range batch(ids, 50) {
 				params := url.Values{"part": {parts}, "id": {strings.Join(group, ",")}}
-				setValues(params, map[string]string{"hl": api.hl, "fields": api.fields})
+				setValues(params, map[string]string{"hl": api.hl, "fields": requestFields})
 				response, err := client.Get(cmd.Context(), "videos", params)
 				if err != nil {
 					return err
@@ -219,6 +225,10 @@ func (a *App) videoGetCommand(stats bool) *cobra.Command {
 				result.Requests++
 				result.Items = append(result.Items, response.Items...)
 			}
+			if err := validateRequestedItems("videos", ids, result.Items); err != nil {
+				return err
+			}
+			stripItemIDs(result.Items, preserveID)
 			return a.renderResult(result, columns)
 		},
 	}

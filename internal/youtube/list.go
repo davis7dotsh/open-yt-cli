@@ -14,6 +14,7 @@ type PageOptions struct {
 	Limit     int
 	PageSize  int
 	PageToken string
+	Filter    func(map[string]any) bool
 }
 
 type ListResult struct {
@@ -37,6 +38,15 @@ func (c *Client) List(ctx context.Context, resource string, params url.Values, o
 		}
 		result.Requests++
 		items := response.Items
+		if options.Filter != nil {
+			filtered := make([]map[string]any, 0, len(items))
+			for _, item := range items {
+				if options.Filter(item) {
+					filtered = append(filtered, item)
+				}
+			}
+			items = filtered
+		}
 		if options.Limit > 0 && len(result.Items)+len(items) > options.Limit {
 			items = items[:options.Limit-len(result.Items)]
 		}

@@ -24,10 +24,11 @@ func (a *App) playlistGetCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result := youtube.ListResult{}
+			result := youtube.ListResult{Items: make([]map[string]any, 0)}
+			requestFields, preserveID := fieldsWithRequired(api.fields, "items/id")
 			for _, group := range batch(ids, 50) {
 				params := url.Values{"part": {partsOr(api.parts, "snippet,contentDetails,status")}, "id": {strings.Join(group, ",")}}
-				setValues(params, map[string]string{"hl": api.hl, "fields": api.fields})
+				setValues(params, map[string]string{"hl": api.hl, "fields": requestFields})
 				response, err := client.Get(cmd.Context(), "playlists", params)
 				if err != nil {
 					return err
@@ -35,6 +36,10 @@ func (a *App) playlistGetCommand() *cobra.Command {
 				result.Items = append(result.Items, response.Items...)
 				result.Requests++
 			}
+			if err := validateRequestedItems("playlists", ids, result.Items); err != nil {
+				return err
+			}
+			stripItemIDs(result.Items, preserveID)
 			return a.renderResult(result, []string{"id", "snippet.title", "snippet.channelTitle", "contentDetails.itemCount", "status.privacyStatus"})
 		},
 	}
@@ -100,10 +105,11 @@ func (a *App) commentGetCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result := youtube.ListResult{}
+			result := youtube.ListResult{Items: make([]map[string]any, 0)}
+			requestFields, preserveID := fieldsWithRequired(api.fields, "items/id")
 			for _, group := range batch(ids, 100) {
 				params := url.Values{"part": {partsOr(api.parts, "snippet")}, "id": {strings.Join(group, ",")}}
-				setValues(params, map[string]string{"textFormat": textFormat, "fields": api.fields})
+				setValues(params, map[string]string{"textFormat": textFormat, "fields": requestFields})
 				response, err := client.Get(cmd.Context(), "comments", params)
 				if err != nil {
 					return err
@@ -111,6 +117,10 @@ func (a *App) commentGetCommand() *cobra.Command {
 				result.Items = append(result.Items, response.Items...)
 				result.Requests++
 			}
+			if err := validateRequestedItems("comments", ids, result.Items); err != nil {
+				return err
+			}
+			stripItemIDs(result.Items, preserveID)
 			return a.renderResult(result, commentColumns())
 		},
 	}

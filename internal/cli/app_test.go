@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -231,12 +232,12 @@ func TestSearchRequestAndPagination(t *testing.T) {
 			t.Errorf("unexpected query: %s", r.URL.RawQuery)
 		}
 		if request == 1 {
-			_, _ = w.Write([]byte(`{"items":[{"id":{"videoId":"a"}}],"nextPageToken":"p2"}`))
+			_, _ = w.Write([]byte(`{"items":[{"id":{"kind":"youtube#video","videoId":"a"}}],"nextPageToken":"p2"}`))
 		} else {
 			if r.URL.Query().Get("pageToken") != "p2" {
 				t.Errorf("page token = %q", r.URL.Query().Get("pageToken"))
 			}
-			_, _ = w.Write([]byte(`{"items":[{"id":{"videoId":"b"}}]}`))
+			_, _ = w.Write([]byte(`{"items":[{"id":{"kind":"youtube#video","videoId":"b"}}]}`))
 		}
 	}))
 	defer server.Close()
@@ -254,6 +255,96 @@ func TestSearchRequestAndPagination(t *testing.T) {
 	}
 	if len(result.Items) != 2 || result.Requests != 2 {
 		t.Fatalf("unexpected output: %s", out.String())
+	}
+}
+
+func TestSearchFiltersUnexpectedResourceKindsBeforeLimit(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "key")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("type") != "video" {
+			t.Errorf("type = %q", r.URL.Query().Get("type"))
+		}
+		if !strings.Contains(r.URL.Query().Get("fields"), "items/id/kind") {
+			t.Errorf("fields = %q", r.URL.Query().Get("fields"))
+		}
+		_, _ = w.Write([]byte(`{"items":[{"id":{"kind":"youtube#channel","channelId":"wrong"},"snippet":{"title":"wrong"}},{"id":{"kind":"youtube#video"},"snippet":{"title":"right"}}]}`))
+	}))
+	defer server.Close()
+	app, out, _ := testApp(server)
+	if err := execute(t, app, "search", "OpenAI", "--type", "video", "--limit", "1", "--fields", "items(id/channelId,snippet/title)", "--format", "json"); err != nil {
+		t.Fatal(err)
+	}
+	var result youtube.ListResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("items = %s", out.String())
+	}
+	if _, present := result.Items[0]["id"]; present {
+		t.Fatalf("internally required ID leaked into output: %s", out.String())
+	}
+	snippet, _ := result.Items[0]["snippet"].(map[string]any)
+	if snippet["title"] != "right" {
+		t.Fatalf("unexpected item: %s", out.String())
+	}
+}
+
+func TestDirectGetCommandsRejectMissingResources(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"channel", []string{"channel", "get", "UC1234567890123456789012"}},
+		{"video", []string{"video", "get", "missing-video"}},
+		{"video stats", []string{"video", "stats", "missing-video"}},
+		{"playlist", []string{"playlist", "get", "missing-playlist"}},
+		{"comment", []string{"comment", "get", "missing-comment"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+			t.Setenv("OYTC_API_KEY", "key")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"items":[]}`))
+			}))
+			defer server.Close()
+			app, _, _ := testApp(server)
+			err := execute(t, app, append(test.args, "--format", "json")...)
+			if err == nil || !strings.Contains(err.Error(), "not found") {
+				t.Fatalf("expected not-found error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestDirectGetReportsOnlyMissingIDs(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "key")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Query().Get("fields"), "items/id") {
+			t.Errorf("fields = %q", r.URL.Query().Get("fields"))
+		}
+		_, _ = w.Write([]byte(`{"items":[{"id":"present"}]}`))
+	}))
+	defer server.Close()
+	app, _, _ := testApp(server)
+	err := execute(t, app, "video", "get", "present", "missing", "--fields", "items(snippet/title)", "--format", "json")
+	if err == nil || err.Error() != "videos not found: missing" {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestValidateRequestedItemsHandlesDuplicatesAcrossBatches(t *testing.T) {
+	requested := make([]string, 51)
+	for index := range requested {
+		requested[index] = "present"
+	}
+	requested = append(requested, "missing")
+	items := []map[string]any{{"id": "present"}, {"id": "present"}}
+	if err := validateRequestedItems("videos", requested, items); err == nil || err.Error() != "videos not found: missing" {
+		t.Fatalf("error = %v", err)
 	}
 }
 

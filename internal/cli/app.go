@@ -136,7 +136,8 @@ func (a *App) searchCommand() *cobra.Command {
 			if len(args) == 1 {
 				params.Set("q", args[0])
 			}
-			setValues(params, map[string]string{"channelId": channelID, "channelType": channelType, "order": order, "publishedAfter": publishedAfter, "publishedBefore": publishedBefore, "regionCode": region, "relevanceLanguage": language, "safeSearch": safeSearch, "type": resourceType, "eventType": eventType, "location": location, "locationRadius": locationRadius, "topicId": topicID, "videoCaption": videoCaption, "videoCategoryId": videoCategory, "videoDuration": videoDuration, "videoEmbeddable": videoEmbeddable, "videoLicense": videoLicense, "videoPaidProductPlacement": videoPaidProductPlacement, "videoSyndicated": videoSyndicated, "fields": api.fields})
+			requestFields, preserveKind := fieldsWithRequired(api.fields, "items/id/kind")
+			setValues(params, map[string]string{"channelId": channelID, "channelType": channelType, "order": order, "publishedAfter": publishedAfter, "publishedBefore": publishedBefore, "regionCode": region, "relevanceLanguage": language, "safeSearch": safeSearch, "type": resourceType, "eventType": eventType, "location": location, "locationRadius": locationRadius, "topicId": topicID, "videoCaption": videoCaption, "videoCategoryId": videoCategory, "videoDuration": videoDuration, "videoEmbeddable": videoEmbeddable, "videoLicense": videoLicense, "videoPaidProductPlacement": videoPaidProductPlacement, "videoSyndicated": videoSyndicated, "fields": requestFields})
 			if err := validateEnum("--order", order, "date", "rating", "relevance", "title", "videoCount", "viewCount"); err != nil {
 				return err
 			}
@@ -179,7 +180,7 @@ func (a *App) searchCommand() *cobra.Command {
 			if channelType != "" && resourceType != "channel" {
 				return &UsageError{Message: "--channel-type requires --type channel"}
 			}
-			return a.runList(cmd, "search", params, flags, []string{"id.kind", "id.videoId", "id.channelId", "id.playlistId", "snippet.title"})
+			return a.runFilteredList(cmd, "search", params, flags, searchResultFilter(resourceType, preserveKind), []string{"id.kind", "id.videoId", "id.channelId", "id.playlistId", "snippet.title"})
 		},
 	}
 	addListFlags(cmd, &flags, 25, 50)
@@ -251,15 +252,94 @@ func hasScope(scopes []string, scope string) bool {
 }
 
 func (a *App) runList(cmd *cobra.Command, resource string, params url.Values, flags listFlags, defaultColumns []string) error {
+	return a.runFilteredList(cmd, resource, params, flags, nil, defaultColumns)
+}
+
+func (a *App) runFilteredList(cmd *cobra.Command, resource string, params url.Values, flags listFlags, filter func(map[string]any) bool, defaultColumns []string) error {
 	client, err := a.authenticatedClient()
 	if err != nil {
 		return err
 	}
-	result, err := client.List(cmd.Context(), resource, params, youtube.PageOptions{All: flags.all, Limit: flags.limit, PageSize: flags.pageSize, PageToken: flags.pageToken})
+	result, err := client.List(cmd.Context(), resource, params, youtube.PageOptions{All: flags.all, Limit: flags.limit, PageSize: flags.pageSize, PageToken: flags.pageToken, Filter: filter})
 	if err != nil {
 		return err
 	}
 	return a.renderResult(result, defaultColumns)
+}
+
+func searchResultFilter(resourceTypes string, preserveKind bool) func(map[string]any) bool {
+	allowed := make(map[string]bool)
+	for _, resourceType := range strings.Split(resourceTypes, ",") {
+		allowed[strings.TrimSpace(resourceType)] = true
+	}
+	return func(item map[string]any) bool {
+		id, _ := item["id"].(map[string]any)
+		if kind, _ := id["kind"].(string); strings.HasPrefix(kind, "youtube#") {
+			accepted := allowed[strings.TrimPrefix(kind, "youtube#")]
+			if accepted && !preserveKind {
+				delete(id, "kind")
+				if len(id) == 0 {
+					delete(item, "id")
+				}
+			}
+			return accepted
+		}
+		return false
+	}
+}
+
+func fieldsWithRequired(fields, required string) (string, bool) {
+	if fields == "" || fieldSelectorIncludes(fields, required) {
+		return fields, true
+	}
+	return fields + "," + required, false
+}
+
+func stripItemIDs(items []map[string]any, preserve bool) {
+	if preserve {
+		return
+	}
+	for _, item := range items {
+		delete(item, "id")
+	}
+}
+
+func validateRequestedItems(resource string, requested []string, items []map[string]any) error {
+	requestedSet := make(map[string]bool, len(requested))
+	uniqueRequested := make([]string, 0, len(requested))
+	for _, id := range requested {
+		if !requestedSet[id] {
+			requestedSet[id] = true
+			uniqueRequested = append(uniqueRequested, id)
+		}
+	}
+
+	returned := make(map[string]bool, len(items))
+	for _, item := range items {
+		if id, _ := item["id"].(string); id != "" {
+			returned[id] = true
+		}
+	}
+	if len(returned) == 0 && len(items) == len(uniqueRequested) {
+		// --fields may omit IDs, so equal cardinality is the strongest check
+		// available without overriding the caller's partial-response selector.
+		return nil
+	}
+
+	missing := make([]string, 0)
+	if len(returned) > 0 {
+		for _, id := range uniqueRequested {
+			if !returned[id] {
+				missing = append(missing, id)
+			}
+		}
+	} else if len(items) < len(uniqueRequested) {
+		missing = uniqueRequested
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s not found: %s", resource, strings.Join(missing, ", "))
 }
 
 func (a *App) renderResult(result youtube.ListResult, defaultColumns []string) error {

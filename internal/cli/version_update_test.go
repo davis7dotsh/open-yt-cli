@@ -40,6 +40,26 @@ func TestVersionCommandJSON(t *testing.T) {
 	}
 }
 
+func TestVersionFlag(t *testing.T) {
+	oldVersion := version.Version
+	t.Cleanup(func() { version.Version = oldVersion })
+	version.Version = "v1.2.3"
+
+	for _, flag := range []string{"-v", "--version"} {
+		t.Run(flag, func(t *testing.T) {
+			app := New()
+			var out bytes.Buffer
+			app.Out = &out
+			if err := execute(t, app, flag); err != nil {
+				t.Fatal(err)
+			}
+			if got := out.String(); got != "oytc v1.2.3\n" {
+				t.Fatalf("output = %q", got)
+			}
+		})
+	}
+}
+
 func TestUpdateCommandRunsThroughInjectedUpdater(t *testing.T) {
 	oldVersion := version.Version
 	t.Cleanup(func() { version.Version = oldVersion })

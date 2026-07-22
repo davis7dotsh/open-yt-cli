@@ -18,6 +18,7 @@ import (
 	"open-yt-cli/internal/config"
 	"open-yt-cli/internal/output"
 	"open-yt-cli/internal/update"
+	"open-yt-cli/internal/version"
 	"open-yt-cli/internal/youtube"
 )
 
@@ -80,6 +81,7 @@ func (a *App) Root() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "oytc",
 		Short:         "Read YouTube data and your channel analytics",
+		Version:       version.Get().Version,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Long: "oytc is a read-only CLI for public YouTube data and your own channel analytics.\n" +
@@ -90,6 +92,7 @@ func (a *App) Root() *cobra.Command {
 	root.SetIn(a.In)
 	root.SetOut(a.Out)
 	root.SetErr(a.Err)
+	root.SetVersionTemplate("oytc {{.Version}}\n")
 	root.PersistentFlags().StringVarP(&a.format, "format", "f", "", "output format: table, json, jsonl, or tsv (default: table on a TTY, json otherwise)")
 	root.PersistentFlags().StringSliceVar(&a.columns, "columns", nil, "table/TSV property paths (comma-separated)")
 	root.PersistentFlags().BoolVar(&a.noHeader, "no-header", false, "omit table/TSV header")

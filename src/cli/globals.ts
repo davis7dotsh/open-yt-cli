@@ -48,7 +48,7 @@ export const resolveGlobals = (
     return Result.fail(new UsageError({ message: timeout.failure.message }))
   }
   if (timeout.success <= 0) {
-    return Result.fail(new UsageError({ message: "--timeout must be greater than zero" }))
+    return Result.fail(new UsageError({ message: "--timeout must be positive" }))
   }
 
   const fallback: OutputFormat =

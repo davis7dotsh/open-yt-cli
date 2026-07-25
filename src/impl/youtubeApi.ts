@@ -31,6 +31,16 @@ export interface YouTubeApiConfig {
 const decodeResponse = Schema.decodeUnknownResult(DataApiResponse)
 
 /**
+ * The `--all` request ceiling (DEVIATIONS.md D3).
+ *
+ * Deliberately far above any real result set: at the largest page size any
+ * endpoint accepts (2000, live chat) this allows 20,000,000 items, and every
+ * other endpoint caps at 50 or 100 per page. A legitimate `--all` cannot reach
+ * it, so hitting it means the server is not terminating.
+ */
+export const MAX_PAGES = 10_000
+
+/**
  * `params.Set(key, value)` — replaces every existing entry for `key` and, when
  * the key is new, appends. Position of an existing key is preserved, which is
  * invisible in the URL (the encoder sorts) but keeps this list stable.
@@ -76,6 +86,14 @@ export const makeYouTubeApi = (
      * that skipped the discarded items. Here a page from which items were
      * DISCARDED reports `""` instead. Evaluated per page, so a page trimmed to
      * exactly its own length is not truncated and keeps its token.
+     *
+     * DEVIATIONS.md D3: `--all` terminates only when the server returns an
+     * empty `nextPageToken`. Go trusted that unconditionally, so a server that
+     * repeats a token — a bug, a buggy proxy, or a hostile endpoint — makes the
+     * loop run forever, accumulating every page in memory with no ceiling. That
+     * is not theoretical: a test harness returning a constant token consumed
+     * ~59 GB of RSS before it was killed. Two bounds now apply, and neither can
+     * fire on a correct server.
      */
     const list = (
       resource: string,
@@ -92,6 +110,7 @@ export const makeYouTubeApi = (
         const kept: Array<JsonObject> = []
         let requests = 0
         let nextPageToken = ""
+        const seenTokens = new Set<string>()
 
         for (;;) {
           const response = yield* get(resource, current)
@@ -119,6 +138,33 @@ export const makeYouTubeApi = (
           ) {
             break
           }
+
+          // DEVIATIONS.md D3, guard 1: a token we have already followed can
+          // only ever return the same page again. Stop and report `""`, which
+          // correctly says "no valid resume point" rather than handing back a
+          // token that loops.
+          if (seenTokens.has(nextPageToken)) {
+            nextPageToken = ""
+            break
+          }
+          seenTokens.add(nextPageToken)
+
+          // DEVIATIONS.md D3, guard 2: a backstop for a server that emits
+          // distinct tokens forever, which the loop check cannot catch. At the
+          // largest page size any endpoint accepts (2000, live chat) this is
+          // 20M items; the real ceilings are far lower, so a legitimate `--all`
+          // cannot reach it.
+          if (requests >= MAX_PAGES) {
+            return yield* Effect.fail(
+              new OperationalError({
+                message:
+                  `pagination did not terminate after ${MAX_PAGES} requests ` +
+                  `(the server kept returning a nextPageToken); ` +
+                  `re-run with --limit to bound the result`
+              })
+            )
+          }
+
           current = setParam(current, "pageToken", nextPageToken)
         }
 

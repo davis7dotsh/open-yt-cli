@@ -25,7 +25,7 @@ import {
   type Params
 } from "../services/index.ts"
 import { makeHttpCore } from "./httpCore.ts"
-import { makeYouTubeApi } from "./youtubeApi.ts"
+import { MAX_PAGES, makeYouTubeApi } from "./youtubeApi.ts"
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -488,4 +488,91 @@ test("composes with the real HttpCore over a stub fetch", async () => {
     "https://stub.test/youtube/v3/liveChat/messages?maxResults=2&pageToken=p2&part=snippet"
   )
   expect(urls.every((u) => !u.includes("k="))).toBe(true)
+})
+
+// ---------------------------------------------------------------------------
+// DEVIATIONS.md D3 — `--all` must terminate against a non-terminating server
+// ---------------------------------------------------------------------------
+
+describe("DEVIATIONS.md D3: --all termination guards", () => {
+  // Go trusted `nextPageToken` unconditionally, so a server repeating one token
+  // looped forever, accumulating every page in memory. A harness doing exactly
+  // this consumed ~59 GB of RSS before it was killed.
+  test("a repeated nextPageToken stops the loop instead of running forever", async () => {
+    const { exit, seen } = await runList(
+      [`{"items":[{"id":"a"}],"nextPageToken":"SAME"}`],
+      { all: true }
+    )
+    const result = okOf(exit)
+    // Page 1 is followed once ("SAME" is new), page 2 returns "SAME" again and
+    // is recognised as already-followed.
+    expect(seen.length).toBe(2)
+    expect(ids(result.items)).toEqual(["a", "a"])
+    // "" is the honest answer: there is no valid resume point.
+    expect(result.nextPageToken).toBe("")
+  })
+
+  test("a token repeated after several distinct pages also stops", async () => {
+    const { exit, seen } = await runList(
+      [
+        `{"items":[{"id":"a"}],"nextPageToken":"t1"}`,
+        `{"items":[{"id":"b"}],"nextPageToken":"t2"}`,
+        `{"items":[{"id":"c"}],"nextPageToken":"t1"}`
+      ],
+      { all: true }
+    )
+    const result = okOf(exit)
+    expect(seen.length).toBe(3)
+    expect(ids(result.items)).toEqual(["a", "b", "c"])
+    expect(result.nextPageToken).toBe("")
+  })
+
+  test("distinct tokens forever hit the request ceiling and fail loudly", async () => {
+    // The loop guard cannot catch a server that never repeats itself, so the
+    // MAX_PAGES backstop must. Each response carries a fresh token.
+    let n = 0
+    const layer = Layer.succeed(HttpCore, {
+      getJson: () => {
+        n++
+        return Effect.succeed(jsonBody(`{"items":[{"id":"i${n}"}],"nextPageToken":"t${n}"}`))
+      }
+    })
+    const program = Effect.gen(function* () {
+      const api = yield* makeYouTubeApi()
+      return yield* api.list("playlistItems", [], { ...defaultPageOptions, all: true })
+    })
+    const exit = await Effect.runPromise(program.pipe(Effect.provide(layer), Effect.exit))
+    const error = errOf(exit)
+    expect(error._tag).toBe("OperationalError")
+    expect(error.message).toContain("pagination did not terminate")
+    expect(error.message).toContain("--limit")
+    expect(n).toBe(MAX_PAGES)
+  })
+
+  test("the guards never fire on a well-behaved server", async () => {
+    const { exit, seen } = await runList(
+      [
+        `{"items":[{"id":"a"}],"nextPageToken":"t1"}`,
+        `{"items":[{"id":"b"}],"nextPageToken":"t2"}`,
+        `{"items":[{"id":"c"}]}`
+      ],
+      { all: true }
+    )
+    const result = okOf(exit)
+    expect(seen.length).toBe(3)
+    expect(ids(result.items)).toEqual(["a", "b", "c"])
+    expect(result.nextPageToken).toBe("")
+  })
+
+  test("--limit still wins over the guards", async () => {
+    // A repeating server plus a limit: the limit terminates first, so the
+    // guards are never consulted.
+    const { exit, seen } = await runList(
+      [`{"items":[{"id":"a"}],"nextPageToken":"SAME"}`],
+      { all: true, limit: 1 }
+    )
+    const result = okOf(exit)
+    expect(seen.length).toBe(1)
+    expect(ids(result.items)).toEqual(["a"])
+  })
 })

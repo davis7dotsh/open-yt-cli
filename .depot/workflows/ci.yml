@@ -12,53 +12,80 @@ permissions:
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+env:
+  # Pinned so the compiled artifacts and the `--compile --target=` matrix are
+  # reproducible. Bump deliberately, alongside a local `make cross-build`.
+  BUN_VERSION: "1.3.14"
 jobs:
   test:
-    name: Format, vet, test, build
+    name: Typecheck, test, build
     # Depot CI sandbox label (https://depot.dev/docs/ci/overview#depot-ci-sandboxes).
     runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          go-version-file: go.mod
-      - name: Verify formatting (gofmt, no rewrite)
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Tests
+        run: bun test
+      - name: Verify bun.lock is unchanged by install
+        run: git diff --exit-code bun.lock
+      - name: Effect imports go through the src/effect.ts barrel
         run: |
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "gofmt required for:" >&2
-            echo "$unformatted" >&2
+          set -eu
+          # Every effect/unstable/* import lives in the barrel, so a rename in a
+          # beta release stays a one-file fix. Written as a positive test with an
+          # explicit exit: `! grep ...` is exempt from `set -e` under POSIX, so
+          # the negated form would silently pass whenever a later line follows.
+          if grep -rn "effect/unstable" src/ --exclude=effect.ts; then
+            echo "import effect/unstable/* only in src/effect.ts (see the lines above)" >&2
             exit 1
           fi
-      - name: Verify go.mod/go.sum are tidy
+          echo "barrel import discipline OK"
+      - name: JSON.stringify is confined to src/json/encode.ts
         run: |
-          go mod tidy
-          git diff --exit-code go.mod go.sum
-      - name: go vet
-        run: go vet ./...
-      - name: Tests (race detector)
-        run: go test -race ./...
+          set -eu
+          # Go's encoder escaping and its >2^53 integer fidelity are reproduced
+          # in src/json/encode.ts; a stray JSON.stringify silently breaks both.
+          offenders="$(grep -rl 'JSON\.stringify' src/ --include='*.ts' |
+            grep -v '^src/json/encode\.ts$' || true)"
+          if [ -n "$offenders" ]; then
+            echo "JSON.stringify is only allowed in src/json/encode.ts; found in:" >&2
+            echo "$offenders" >&2
+            exit 1
+          fi
+          echo "JSON.stringify confinement OK"
       - name: Build
-        run: go build ./...
+        run: bun run build
   cross-build:
-    name: Cross-compile release targets
+    name: Compile release targets
     runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          go-version-file: go.mod
-      - name: Build every release platform
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+      - name: Compile every release platform
         run: |
           set -eu
-          for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
-            echo "== $platform =="
-            CGO_ENABLED=0 GOOS="${platform%/*}" GOARCH="${platform#*/}" \
-              go build -trimpath -o /dev/null ./cmd/oytc
+          # Mirrors PLATFORMS + bun_target() in scripts/package.sh. Bun has no
+          # ARM64 Windows --compile target, so windows/arm64 is not published;
+          # ARM64 Windows installs the amd64 build (see site/install.ps1).
+          for target in bun-linux-x64 bun-linux-arm64 bun-darwin-x64 bun-darwin-arm64 bun-windows-x64; do
+            echo "== $target =="
+            out="$(mktemp -d)"
+            bun build --compile --target="$target" --outfile "$out/oytc" src/main.ts
+            rm -rf "$out"
           done
   scripts-and-site:
     name: Validate installer, scripts, skill, site
@@ -75,7 +102,7 @@ jobs:
       - name: shellcheck
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q shellcheck
-          shellcheck site/install.sh scripts/package.sh
+          shellcheck site/install.sh scripts/package.sh dev
       - name: Skill structure
         run: |
           python3 - <<'EOF'
@@ -93,21 +120,38 @@ jobs:
       - name: Asset naming consistency (release <-> installer <-> updater)
         run: |
           set -eu
-          # The canonical pattern oytc_<tag>_<os>_<arch>.<ext> must appear in all three places.
-          grep -q 'oytc_%s_%s_%s' internal/update/update.go
+          # The canonical pattern oytc_<tag>_<os>_<arch>.<ext> must appear in all
+          # three places. These are single-quoted shell literals matching the
+          # *source syntax* of each file — a TypeScript template literal in the
+          # updater's platform matrix, shell parameter expansions in the two
+          # scripts — not any expanded value. Rewrite them when the naming
+          # changes; never delete them. This step is the only thing keeping the
+          # three copies of the scheme from drifting apart.
+          grep -q 'oytc_${tag}_${goos}_${goarch}' src/impl/platformMatrix.ts
           grep -q 'oytc_${VERSION}_${goos}_${goarch}' scripts/package.sh
           grep -q 'oytc_${version}_${goos}_${goarch}' site/install.sh
-          grep -q 'checksums.txt' internal/update/update.go
+          grep -rq 'checksums.txt' src/impl/
           grep -q 'checksums.txt' scripts/package.sh
           grep -q 'checksums.txt' site/install.sh
           echo "asset naming consistent"
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Platform matrix is the five published pairs
+        run: |
+          set -eu
+          # The packager, `make cross-build`, and this workflow's cross-build job
+          # must all agree on exactly these five pairs.
+          grep -q 'PLATFORMS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64"' scripts/package.sh
+          echo "platform matrix consistent"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          go-version-file: go.mod
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
       - name: Installer end-to-end against local artifacts
         run: |
           set -eu
           ./scripts/package.sh v0.0.0-ci dist-ci
+          count="$(ls -1 dist-ci/oytc_v0.0.0-ci_* | wc -l)"
+          [ "$count" -eq 5 ] || { echo "expected 5 archives, got $count" >&2; exit 1; }
           mkdir -p serve/v0.0.0-ci
           cp dist-ci/oytc_v0.0.0-ci_linux_amd64.tar.gz dist-ci/checksums.txt serve/v0.0.0-ci/
           python3 -m http.server 8931 --directory serve >/dev/null 2>&1 &

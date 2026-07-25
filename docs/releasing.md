@@ -15,17 +15,44 @@ others (CI has a consistency check):
 | Windows archive | `oytc_<tag>_windows_<arch>.zip` containing a single `oytc.exe` |
 | Checksums | `checksums.txt` (sha256sum format, one line per archive) |
 
-Platforms: `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`, `windows/amd64`,
-`windows/arm64`. Producers/consumers of this contract:
+Platforms — five pairs: `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`,
+`windows/amd64`. Producers/consumers of this contract:
 
 - `scripts/package.sh` — builds the archives and `checksums.txt`
 - `.depot/workflows/release.yml` — runs `package.sh` and uploads to the GitHub Release
 - `site/install.sh` / `site/install.ps1` — download + verify + install
-- `internal/update/update.go` (`AssetName`) — the self-updater
+- `src/impl/platformMatrix.ts` (`assetName`) — the self-updater
 
-Version metadata is injected via
-`-ldflags -X open-yt-cli/internal/version.{Version,Commit,Date}=…` and surfaced by
-`oytc version`.
+### Why there is no `windows/arm64`
+
+The binaries are produced by `bun build --compile`, which has no `bun-windows-arm64`
+target. ARM64 Windows is still supported: `site/install.ps1` detects
+`Win32_Processor.Architecture == 12`, prints a note, and installs the **amd64** build,
+which Windows runs under x64 emulation. This is deliberately *not* a hard failure —
+failing would strand ARM64 Windows users who installed a previous release on a binary
+their own `oytc update` could never replace.
+
+The archive names keep the historical Go-style `os`/`arch` tokens (`linux`, `darwin`,
+`windows` / `amd64`, `arm64`) even though the toolchain changed, so clients installed from
+an older release still resolve the right asset when they self-update. Two mappings
+therefore coexist and must not be confused:
+
+| Asset-name pair | `bun build --compile --target=` |
+| --- | --- |
+| `linux/amd64` | `bun-linux-x64` |
+| `linux/arm64` | `bun-linux-arm64` |
+| `darwin/amd64` | `bun-darwin-x64` |
+| `darwin/arm64` | `bun-darwin-arm64` |
+| `windows/amd64` | `bun-windows-x64` |
+
+`scripts/package.sh` owns the shell copy of that table (`bun_target()`);
+`src/impl/platformMatrix.ts` owns the TypeScript copy plus the
+`process.platform`/`process.arch` → `goos`/`goarch` direction used by the self-updater.
+
+Version metadata is injected at bundle time via
+`bun build --define OYTC_VERSION='"<tag>"' --define OYTC_COMMIT='"<sha>"'
+--define OYTC_DATE='"<iso8601>"'`, read by `src/impl/versionInfo.ts` (which falls back to
+`dev`/`unknown`/`unknown` for plain `bun run`), and surfaced by `oytc version`.
 
 ## CI system: Depot CI (not GitHub Actions)
 
@@ -48,7 +75,7 @@ Key facts (source: <https://depot.dev/docs/ci/overview>,
   merged to the default branch. `push` (branches/tags/paths), `pull_request`,
   `workflow_dispatch`, `schedule`, and concurrency groups are all supported.
 - **Marketplace actions** (JavaScript/composite/Docker) work, so pinned
-  `actions/checkout`, `actions/setup-go`, and `softprops/action-gh-release` run unchanged.
+  `actions/checkout`, `oven-sh/setup-bun`, and `softprops/action-gh-release` run unchanged.
 - **Permissions**: Depot CI supports `contents`, `id-token`, `actions`, `checks`,
   `metadata`, `pull_requests`, `statuses`, `workflows`. It does **not** support
   `pages: write` or the `environment:` job key, and its `id-token` is a Depot OIDC token
@@ -85,7 +112,7 @@ Key facts (source: <https://depot.dev/docs/ci/overview>,
 
 | Workflow | Trigger | What it does |
 | --- | --- | --- |
-| `.depot/workflows/ci.yml` | PRs and pushes to `main` | gofmt check (no rewrite), `go mod tidy` check, `go vet`, `go test -race`, build, cross-compile all six release targets, shell syntax + shellcheck, skill structure check, asset-naming consistency check, installer end-to-end test against locally packaged artifacts |
+| `.depot/workflows/ci.yml` | PRs and pushes to `main` | `bun install --frozen-lockfile`, `bun run typecheck`, `bun test`, `bun.lock` diff check, the two source-discipline greps (Effect imports via the `src/effect.ts` barrel; `JSON.stringify` confined to `src/json/encode.ts`), `bun run build`, compile all five release targets, shell syntax + shellcheck, skill structure check, asset-naming and platform-matrix consistency checks, installer end-to-end test against locally packaged artifacts |
 | `.depot/workflows/release.yml` | push of a `v*` tag, or `workflow_dispatch` with an existing tag | tests, `scripts/package.sh`, smoke-test of a packaged binary, create GitHub Release with archives + `checksums.txt` (prerelease flag auto-set for tags containing `-`) |
 | `.depot/workflows/pages.yml` | push to `main` touching `site/**`, or manual | validate `site/` and publish it as an orphan commit force-pushed to the `gh-pages` branch |
 
@@ -109,7 +136,7 @@ Then verify:
 
 1. The `Release` workflow run is green in the Depot dashboard (or
    `depot ci run list`) and
-   <https://github.com/davis7dotsh/open-yt-cli/releases> shows six archives plus
+   <https://github.com/davis7dotsh/open-yt-cli/releases> shows five archives plus
    `checksums.txt`.
 2. `curl -fsSL https://davis7dotsh.github.io/open-yt-cli/install.sh | sh` installs and
    `oytc version` prints `v0.1.0`.
@@ -133,6 +160,18 @@ depot ci dispatch --repo davis7dotsh/open-yt-cli --workflow release.yml \
 ## Local dry run
 
 ```sh
-./scripts/package.sh v0.0.0-local dist   # build all archives + checksums locally
-make release-check                       # packaging + installer sanity, no publishing
+./scripts/package.sh v0.0.0-local dist   # build all five archives + checksums locally
+make release-check                       # typecheck, tests, 5-target compile, site checks
+make lock-check                          # bun.lock matches package.json (touches node_modules)
 ```
+
+`make release-check` deliberately omits `lock-check`: the latter runs `bun install`, which
+mutates `node_modules/`. CI runs both.
+
+## Toolchain
+
+Bun is pinned in `.depot/workflows/ci.yml` (`BUN_VERSION`) and repeated in `release.yml`;
+bump them together, and re-run `make cross-build` locally afterwards — a Bun upgrade
+changes the embedded runtime in every compiled binary. There is no formatter dependency in
+this repo, so `make fmt` / `make fmt-check` are no-ops kept for muscle memory; correctness
+is enforced by `bun run typecheck` and `bun test` instead.

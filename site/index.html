@@ -69,6 +69,7 @@
       color: var(--muted);
     }
     .note strong { color: var(--text); }
+    .muted { color: var(--muted); font-size: 0.95rem; }
     table { border-collapse: collapse; width: 100%; margin: 0.75rem 0; font-size: 0.95rem; }
     th, td { text-align: left; padding: 0.4rem 0.75rem; border-bottom: 1px solid var(--border); }
     th { color: var(--muted); font-weight: 600; }
@@ -108,6 +109,9 @@
   Windows: use <a href="https://davis7dotsh.github.io/open-yt-cli/install.ps1">install.ps1</a>
   (<code>irm https://davis7dotsh.github.io/open-yt-cli/install.ps1 | iex</code>) or grab a zip from the
   <a href="https://github.com/davis7dotsh/open-yt-cli/releases">releases page</a>.</p>
+  <p class="muted">Prebuilt binaries: Linux and macOS on x86-64 and ARM64, plus Windows x86-64
+  (ARM64 Windows runs the x86-64 build under emulation). Each release is a single
+  self-contained executable — no runtime to install.</p>
 
   <h2>Quick setup</h2>
   <pre><code># 1. Create a free YouTube Data API v3 key (see the setup guide below)

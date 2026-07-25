@@ -7,3 +7,6 @@
 
 # Local credentials (never commit)
 .env
+
+# TypeScript / Bun
+/node_modules/

@@ -1,0 +1,23 @@
+{
+  "name": "oytc",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "effect": "4.0.0-beta.101",
+    "@effect/platform-bun": "4.0.0-beta.101"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "@effect/language-service": "0.87.1",
+    "@effect/tsgo": "0.24.3",
+    "@types/bun": "latest"
+  },
+  "scripts": {
+    "postinstall": "chmod +x node_modules/@effect/tsgo-*/lib/tsc 2>/dev/null || true",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "effect-tsgo diagnostics --project tsconfig.json --format text",
+    "test": "bun test",
+    "dev": "bun run src/main.ts",
+    "build": "bun build --compile --outfile=bin/oytc src/main.ts"
+  }
+}

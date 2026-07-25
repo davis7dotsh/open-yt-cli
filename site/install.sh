@@ -10,14 +10,15 @@
 #   OYTC_NO_SYMLINKS  set to 1 to skip the oytc_update/oytc_upgrade symlinks
 #
 # Behavior:
-#   - Detects OS (linux, darwin) and architecture (amd64, arm64).
+#   - Detects OS (linux, darwin) and architecture (amd64, arm64). All four
+#     combinations are published; Windows is served by install.ps1.
 #   - Downloads the release archive and checksums.txt from GitHub Releases.
 #   - Verifies the archive's SHA-256 before extracting anything.
 #   - Installs to a user-writable directory; never requires root by default.
 #   - Creates oytc_update and oytc_upgrade symlinks (self-update aliases).
 #
 # Windows users: this script supports macOS and Linux only. On Windows,
-# download the oytc_<version>_windows_<arch>.zip asset from
+# download the oytc_<version>_windows_amd64.zip asset from
 # https://github.com/davis7dotsh/open-yt-cli/releases, verify its SHA-256
 # against checksums.txt (PowerShell: Get-FileHash -Algorithm SHA256), and
 # place oytc.exe on your PATH.

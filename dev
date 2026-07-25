@@ -1,4 +1,10 @@
 #!/usr/bin/env sh
+# Run oytc straight from source, without compiling a binary first.
+#
+#   ./dev search "cats" --limit 5
+#
+# Version metadata is not injected here, so `./dev version` reports the
+# dev/unknown/unknown fallbacks from src/impl/versionInfo.ts.
 set -eu
 
-exec go run ./cmd/oytc "$@"
+exec bun run src/main.ts "$@"

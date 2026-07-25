@@ -28,8 +28,9 @@
  */
 
 import { Effect, Stdio, Stream } from "effect"
-import { Command, Flag } from "../effect.ts"
+import { Argument, Command, Flag } from "../effect.ts"
 import { OperationalError } from "../domain/errors.ts"
+import { exactArgs } from "./playlist.ts"
 import type { JsonObject } from "../json/value.ts"
 import { compareVersions } from "../impl/semver.ts"
 import { updateColumns, versionColumns } from "../output/columns.ts"
@@ -72,8 +73,17 @@ const isTable = (format: OutputFormat): boolean => format === "table"
 // version
 // ---------------------------------------------------------------------------
 
-export const versionCommand = Command.make("version", {}, () =>
+/**
+ * `Args: exactArgs(0)` in Go. A variadic argument is the only way to observe
+ * extra positionals and reproduce Go's message; without it the framework
+ * silently drops them and the handler runs anyway.
+ */
+const noPositionals = { extra: Argument.string("").pipe(Argument.variadic()) }
+
+export const versionCommand = Command.make("version", noPositionals, ({ extra }) =>
   Effect.gen(function* () {
+    const arity = exactArgs(0, extra)
+    if (arity !== undefined) return yield* Effect.fail(arity)
     const options = yield* AppOptions
     const versionInfo = yield* VersionInfo
     const info = yield* versionInfo.get
@@ -131,6 +141,7 @@ export const isUpToDate = (latestVersion: string, currentVersion: string): boole
 export const updateCommand = Command.make(
   "update",
   {
+    ...noPositionals,
     check: Flag.boolean("check").pipe(
       Flag.withDescription("only report whether a newer release exists")
     ),
@@ -144,8 +155,13 @@ export const updateCommand = Command.make(
       Flag.withDescription("install this exact release tag (e.g. v0.2.0) instead of the latest")
     )
   },
-  ({ check, targetVersion }) =>
+  ({ extra, check, targetVersion }) =>
     Effect.gen(function* () {
+      // MUST run before `updater.run`: this handler REPLACES THE EXECUTABLE.
+      // Without the guard, `oytc update <typo>` printed the arity error, then
+      // self-updated anyway and exited 0.
+      const arity = exactArgs(0, extra)
+      if (arity !== undefined) return yield* Effect.fail(arity)
       const options = yield* AppOptions
       const updater = yield* Updater
       const result = yield* updater.run({ checkOnly: check, targetVersion })

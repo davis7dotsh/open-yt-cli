@@ -94,6 +94,24 @@ const AnalyticsLive = AnalyticsApiLive.pipe(Layer.provide(HttpCoreLive))
 
 export const AppLayer = Layer.mergeAll(
   EnvLive,
+  /**
+   * The raw HTTP client is part of AppLayer's OUTPUT, not just an internal
+   * dependency of HttpCoreLive.
+   *
+   * `cli/auth.ts:keyScopedApi` builds a throwaway `YouTubeApi` bound to a
+   * specific key — the key just typed at the `login` prompt, or the stored key
+   * being validated by `status --check` — via
+   * `Effect.serviceOption(HttpClient.HttpClient)`. Without HttpClient in the
+   * output that lookup returned None in the compiled binary and the code fell
+   * back to the AMBIENT `YouTubeApi`, which is bound to whatever is in the
+   * credential store. Consequences, both verified against the Go binary:
+   *   - `login` on an empty config probed with NO key and reported
+   *     "no API key configured" instead of the API's rejection.
+   *   - `status --check` probed the API key using the OAUTH credentials, so a
+   *     bad key was reported through an OAuth error message.
+   * The unit tests never caught it because they provide HttpClient themselves.
+   */
+  HttpClientLive,
   CredentialsLive,
   HttpCoreLive,
   YouTubeApiLive,

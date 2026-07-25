@@ -33,9 +33,10 @@
  */
 
 import { Effect, FileSystem, Stdio, Stream } from "effect"
-import { Command } from "../effect.ts"
+import { Argument, Command } from "../effect.ts"
 import { OperationalError } from "../domain/errors.ts"
 import { Prompts, SkillInstaller } from "../services/index.ts"
+import { exactArgs } from "./playlist.ts"
 
 /** stdout, via the same `Stdio` seam the renderer writes through. */
 const writeOut = (text: string): Effect.Effect<void, OperationalError, Stdio.Stdio> =>
@@ -87,8 +88,15 @@ export const confirmationBlock = (target: string, action: "create" | "replace"):
   `Permission requested: ${action} this directory and write SKILL.md plus references.\n` +
   "Continue? [y/N] "
 
-export const skillsInstallCommand = Command.make("install", {}, () =>
+export const skillsInstallCommand = Command.make(
+  "install",
+  // Go: `Args: exactArgs(0)`. Checked before the confirmation prompt, which
+  // otherwise writes to the destination directory.
+  { extra: Argument.string("").pipe(Argument.variadic()) },
+  ({ extra }) =>
   Effect.gen(function* () {
+    const arity = exactArgs(0, extra)
+    if (arity !== undefined) return yield* Effect.fail(arity)
     const installer = yield* SkillInstaller
     const prompts = yield* Prompts
     const fs = yield* FileSystem.FileSystem

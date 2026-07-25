@@ -45,7 +45,7 @@
  */
 
 import { Effect, Option, Redacted, Result, Stdio, Stream } from "effect"
-import { Command, Flag, HttpClient } from "../effect.ts"
+import { Argument, Command, Flag, HttpClient } from "../effect.ts"
 import {
   ApiError,
   AuthHintError,
@@ -61,6 +61,7 @@ import { statusCheckDateRange } from "../impl/analyticsApi.ts"
 import { makeHttpCore } from "../impl/httpCore.ts"
 import { makeYouTubeApi } from "../impl/youtubeApi.ts"
 import { statusCheckColumns, statusColumns } from "../output/columns.ts"
+import { exactArgs } from "./playlist.ts"
 import {
   AnalyticsApi,
   AppOptions,
@@ -407,9 +408,18 @@ const loginOAuth = Effect.gen(function* () {
   )
 })
 
+/**
+ * `Args: exactArgs(0)` in Go (auth.go:37,51,61). A variadic argument is the
+ * only way to observe extra positionals; without it the framework drops them
+ * silently and the handler runs, so `oytc login extra` would prompt for a key
+ * and `oytc logout extra` would delete credentials.
+ */
+const noPositionals = { extra: Argument.string("").pipe(Argument.variadic()) }
+
 export const loginCommand = Command.make(
   "login",
   {
+    ...noPositionals,
     oauth: Flag.boolean("oauth").pipe(
       Flag.withDescription("authorize read-only access to your channel and Analytics")
     )
@@ -417,8 +427,10 @@ export const loginCommand = Command.make(
   // A ternary between two Effects with DIFFERENT requirement sets produces a
   // union type that is not assignable to a single Effect; suspending inside a
   // gen block unifies both arms' R instead.
-  ({ oauth }) =>
+  ({ extra, oauth }) =>
     Effect.gen(function* () {
+      const arity = exactArgs(0, extra)
+      if (arity !== undefined) return yield* Effect.fail(arity)
       if (oauth) yield* loginOAuth
       else yield* loginApiKey
     })
@@ -431,12 +443,15 @@ export const loginCommand = Command.make(
 export const statusCommand = Command.make(
   "status",
   {
+    ...noPositionals,
     check: Flag.boolean("check").pipe(
       Flag.withDescription("validate configured credentials with the API")
     )
   },
-  ({ check }) =>
+  ({ extra, check }) =>
     Effect.gen(function* () {
+      const arity = exactArgs(0, extra)
+      if (arity !== undefined) return yield* Effect.fail(arity)
       const options = yield* AppOptions
       const store = yield* CredentialStore
       const credentials = yield* store.load
@@ -510,8 +525,10 @@ const failureOf = (
 // logout
 // ---------------------------------------------------------------------------
 
-export const logoutCommand = Command.make("logout", {}, () =>
+export const logoutCommand = Command.make("logout", noPositionals, ({ extra }) =>
   Effect.gen(function* () {
+    const arity = exactArgs(0, extra)
+    if (arity !== undefined) return yield* Effect.fail(arity)
     const store = yield* CredentialStore
     const oauth = yield* OAuthService
 

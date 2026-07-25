@@ -45,7 +45,7 @@
  */
 
 import { Effect, Option, Stdio, Stream } from "effect"
-import { Command, Flag } from "../effect.ts"
+import { Argument, Command, Flag } from "../effect.ts"
 import {
   ApiError,
   NotFoundError,
@@ -246,9 +246,21 @@ const renderResult = (
     yield* writeErr(`${result.items.length} item(s), ${result.requests} request(s)${more}\n`)
   })
 
+/**
+ * `Args: exactArgs(0)` in Go (live_chat.go:38,67). Observed variadically
+ * because the framework otherwise drops extra positionals silently.
+ */
+const noPositionals = { extra: Argument.string("").pipe(Argument.variadic()) }
+
+const rejectExtraArgs = (extra: ReadonlyArray<string>) =>
+  extra.length === 0
+    ? undefined
+    : new UsageError({ message: `expected 0 argument(s), received ${extra.length}` })
+
 export const liveChatListCommand = Command.make(
   "list",
   {
+    ...noPositionals,
     ...liveChatFlags,
     all: Flag.boolean("all").pipe(
       Flag.withDescription("not supported for finite live chat; use stream")
@@ -256,6 +268,9 @@ export const liveChatListCommand = Command.make(
   },
   (config) =>
     Effect.gen(function* () {
+      // Arity is cobra's `Args`, which runs before PreRunE.
+      const arity = rejectExtraArgs(config.extra)
+      if (arity !== undefined) return yield* Effect.fail(arity)
       // PreRunE first…
       const invalid = validateLiveChatFlags(config)
       if (invalid !== undefined) return yield* Effect.fail(invalid)
@@ -498,8 +513,13 @@ const withOwnSigint = <A, E, R>(
     )
   })
 
-export const liveChatStreamCommand = Command.make("stream", liveChatFlags, (config) =>
+export const liveChatStreamCommand = Command.make(
+  "stream",
+  { ...noPositionals, ...liveChatFlags },
+  (config) =>
   Effect.gen(function* () {
+    const arity = rejectExtraArgs(config.extra)
+    if (arity !== undefined) return yield* Effect.fail(arity)
     const invalid = validateLiveChatFlags(config)
     if (invalid !== undefined) return yield* Effect.fail(invalid)
 

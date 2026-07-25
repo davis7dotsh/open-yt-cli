@@ -19,6 +19,7 @@ export const FORMATS = ["table", "json", "jsonl", "tsv"] as const
  */
 export const globalFlags = {
   format: Flag.choice("format", FORMATS).pipe(
+    Flag.withAlias("f"),
     Flag.withDescription("Output format (default: table on a terminal, json when piped)"),
     Flag.optional
   ),
@@ -30,7 +31,16 @@ export const globalFlags = {
     Flag.withDescription("Omit the header row in table and tsv output")
   ),
   quiet: Flag.boolean("quiet").pipe(
+    Flag.withAlias("q"),
     Flag.withDescription("Suppress the request-count summary on stderr")
+  ),
+  /**
+   * Accepted and ignored, exactly as in Go: "disable color (accepted for
+   * scripting; first draft emits no color)". Scripts and CI configs pass it,
+   * so rejecting it is a regression even though it has no effect.
+   */
+  noColor: Flag.boolean("no-color").pipe(
+    Flag.withDescription("disable color (accepted for scripting; first draft emits no color)")
   ),
   timeout: Flag.string("timeout").pipe(
     Flag.withDescription("Request timeout, e.g. 20s or 1m30s"),
@@ -43,5 +53,7 @@ export interface GlobalFlagValues {
   readonly columns: Option.Option<string>
   readonly noHeader: boolean
   readonly quiet: boolean
+  /** Parsed for compatibility and deliberately unused; see globalFlags. */
+  readonly noColor: boolean
   readonly timeout: string
 }

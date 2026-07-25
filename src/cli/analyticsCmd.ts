@@ -214,6 +214,19 @@ interface AnalyticsFlagValues {
   readonly limit: number
 }
 
+/**
+ * `Args: exactArgs(0)` in Go (analytics.go:44,71,108,124). Without a variadic
+ * argument the framework drops extra positionals silently and the handler runs
+ * anyway, so `oytc analytics overview extra` would issue a real API call.
+ */
+const noPositionals = { extra: Argument.string("").pipe(Argument.variadic()) }
+
+/** Go's arity check, run before anything else in each analytics handler. */
+const rejectExtraArgs = (extra: ReadonlyArray<string>) =>
+  extra.length === 0
+    ? undefined
+    : new UsageError({ message: `expected 0 argument(s), received ${extra.length}` })
+
 // ---------------------------------------------------------------------------
 // The shared runner
 // ---------------------------------------------------------------------------
@@ -276,6 +289,7 @@ const runAnalytics = (flags: AnalyticsFlagValues, request: AnalyticsRequest) =>
 export const analyticsReportCommand = Command.make(
   "report",
   {
+    ...noPositionals,
     ...analyticsFlags,
     metrics: Flag.string("metrics").pipe(
       Flag.withDefault(""),
@@ -288,6 +302,8 @@ export const analyticsReportCommand = Command.make(
   },
   (config) =>
     Effect.gen(function* () {
+      const arity = rejectExtraArgs(config.extra)
+      if (arity !== undefined) return yield* Effect.fail(arity)
       const metrics = csvValues(config.metrics)
       // Runs before the date and limit checks, and before any credential load.
       if (metrics.length === 0) {
@@ -306,6 +322,7 @@ export const analyticsReportCommand = Command.make(
 export const analyticsOverviewCommand = Command.make(
   "overview",
   {
+    ...noPositionals,
     ...analyticsFlags,
     by: Flag.string("by").pipe(
       Flag.withDefault(""),
@@ -314,6 +331,8 @@ export const analyticsOverviewCommand = Command.make(
   },
   (config) =>
     Effect.gen(function* () {
+      const arity = rejectExtraArgs(config.extra)
+      if (arity !== undefined) return yield* Effect.fail(arity)
       const enumError = validateEnum("--by", config.by, ["day", "month"])
       if (enumError !== undefined) return yield* Effect.fail(enumError)
       // `--by` goes through csvValues, so a whitespace-only value contributes
@@ -332,37 +351,60 @@ export const analyticsOverviewCommand = Command.make(
 
 export const analyticsVideoCommand = Command.make(
   "video",
-  { ...analyticsFlags, videoId: Argument.string("VIDEO_ID") },
+  // `Args: exactArgs(1)`. A plain `Argument.string` reports the framework's own
+  // "Missing required argument" for 0 args and silently DROPS extras, so the
+  // arity is observed variadically and checked here, as everywhere else.
+  {
+    ...analyticsFlags,
+    ids: Argument.string("VIDEO_ID").pipe(Argument.variadic())
+  },
   (config) =>
-    runAnalytics(config, {
-      metrics: analyticsVideoColumns,
-      dimensions: [],
-      builtInFilter: `video==${config.videoId}`,
-      columns: analyticsVideoColumns
+    Effect.gen(function* () {
+      if (config.ids.length !== 1) {
+        return yield* Effect.fail(
+          new UsageError({
+            message: `expected 1 argument(s), received ${config.ids.length}`
+          })
+        )
+      }
+      yield* runAnalytics(config, {
+        metrics: analyticsVideoColumns,
+        dimensions: [],
+        builtInFilter: `video==${config.ids[0]!}`,
+        columns: analyticsVideoColumns
+      })
     })
 ).pipe(Command.withDescription("Show core analytics metrics for one owned video"))
 
 export const analyticsTrafficSourcesCommand = Command.make(
   "traffic-sources",
-  analyticsFlags,
+  { ...noPositionals, ...analyticsFlags },
   (config) =>
-    runAnalytics(config, {
-      metrics: ["views", "estimatedMinutesWatched"],
-      dimensions: ["insightTrafficSourceType"],
-      builtInFilter: "",
-      columns: analyticsTrafficSourcesColumns
+    Effect.gen(function* () {
+      const arity = rejectExtraArgs(config.extra)
+      if (arity !== undefined) return yield* Effect.fail(arity)
+      yield* runAnalytics(config, {
+        metrics: ["views", "estimatedMinutesWatched"],
+        dimensions: ["insightTrafficSourceType"],
+        builtInFilter: "",
+        columns: analyticsTrafficSourcesColumns
+      })
     })
 ).pipe(Command.withDescription("Break views and watch time down by traffic source"))
 
 export const analyticsDemographicsCommand = Command.make(
   "demographics",
-  analyticsFlags,
+  { ...noPositionals, ...analyticsFlags },
   (config) =>
-    runAnalytics(config, {
-      metrics: ["viewerPercentage"],
-      dimensions: ["ageGroup", "gender"],
-      builtInFilter: "",
-      columns: analyticsDemographicsColumns
+    Effect.gen(function* () {
+      const arity = rejectExtraArgs(config.extra)
+      if (arity !== undefined) return yield* Effect.fail(arity)
+      yield* runAnalytics(config, {
+        metrics: ["viewerPercentage"],
+        dimensions: ["ageGroup", "gender"],
+        builtInFilter: "",
+        columns: analyticsDemographicsColumns
+      })
     })
 ).pipe(Command.withDescription("Break viewer percentage down by age group and gender"))
 

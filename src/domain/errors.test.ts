@@ -167,7 +167,24 @@ describe("statusText", () => {
     expect(statusText(status)).toBe(expected)
   })
 
-  test("unrecognised status yields empty string, not an invented phrase", () => {
-    expect(statusText(599)).toBe("")
+  // Verified against Go 1.26.5 net/http.StatusText by iterating 100..599.
+  test.each([
+    [402, "Payment Required"],
+    [418, "I'm a teapot"],
+    [451, "Unavailable For Legal Reasons"],
+    [507, "Insufficient Storage"],
+    [511, "Network Authentication Required"],
+    [100, "Continue"],
+    [200, "OK"],
+    [308, "Permanent Redirect"]
+  ])("%d -> %s (full table, not just the common codes)", (status, expected) => {
+    expect(statusText(status)).toBe(expected)
   })
+
+  test.each([[599], [509], [512], [0], [99]])(
+    "unrecognised status %d yields empty string, not an invented phrase",
+    (status) => {
+      expect(statusText(status)).toBe("")
+    }
+  )
 })

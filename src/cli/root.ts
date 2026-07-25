@@ -21,6 +21,7 @@
 import { Effect, Layer, Result } from "effect"
 import { Command } from "../effect.ts"
 import { AppOptions, ProcessEnv } from "../services/index.ts"
+import { ProcessEnvLive } from "../impl/processEnv.ts"
 import { globalFlags } from "./flags.ts"
 import { resolveGlobals } from "./globals.ts"
 
@@ -47,6 +48,10 @@ export const root = Command.make("oytc").pipe(
         if (Result.isFailure(resolved)) return yield* Effect.fail(resolved.failure)
         return resolved.success
       })
-    )
+      // ProcessEnv is supplied here rather than left to main.ts's
+      // `Effect.provide(AppLayer)`: this layer is constructed by
+      // `Command.provide` during argument parsing, which happens before the
+      // outer provide applies, so the requirement must be discharged locally.
+    ).pipe(Layer.provide(ProcessEnvLive))
   )
 )

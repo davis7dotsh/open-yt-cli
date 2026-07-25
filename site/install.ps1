@@ -9,17 +9,25 @@
 # Downloads the windows zip from GitHub Releases, verifies its SHA-256
 # against checksums.txt, and installs oytc.exe plus oytc_update.cmd /
 # oytc_upgrade.cmd shims. Never requires administrator rights.
+#
+# Only one Windows build is published: windows/amd64. The toolchain has no
+# native ARM64 Windows target, so ARM64 machines install the amd64 binary and
+# run it under Windows' x64 emulation.
 $ErrorActionPreference = 'Stop'
 
 $Repo = 'davis7dotsh/open-yt-cli'
 
-$arch = switch ((Get-CimInstance Win32_Processor).Architecture) {
-    12 { 'arm64' }   # ARM64
-    9 { 'amd64' }    # x64
-    default {
-        if ([Environment]::Is64BitOperatingSystem) { 'amd64' }
-        else { throw 'oytc requires a 64-bit Windows (amd64 or arm64).' }
-    }
+# The published Windows asset is always amd64; $arch stays a variable so the
+# asset name below keeps the same oytc_<version>_windows_<arch>.zip shape as
+# the packager and the self-updater.
+$arch = 'amd64'
+$processorArchitecture = @(Get-CimInstance Win32_Processor)[0].Architecture
+if ($processorArchitecture -eq 12) {
+    # ARM64. There is no windows/arm64 asset; Windows on ARM runs x64 binaries
+    # under emulation, so install amd64 rather than failing.
+    Write-Host 'ARM64 Windows detected: installing the amd64 build, which runs under x64 emulation.'
+} elseif ($processorArchitecture -ne 9 -and -not [Environment]::Is64BitOperatingSystem) {
+    throw 'oytc requires a 64-bit Windows (amd64, or arm64 with x64 emulation).'
 }
 
 $version = $env:OYTC_VERSION

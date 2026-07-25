@@ -10,16 +10,23 @@
  * is for the CLI framework's own parse failures: it exits 1 where Go exits 2.
  */
 
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { Command } from "./effect.ts"
 import { AppLayer } from "./layers.ts"
 import { root } from "./cli/root.ts"
+import { resolveVersionDetails } from "./impl/versionInfo.ts"
 
-const cli = Command.run(root, {
-  version: process.env["OYTC_VERSION"] ?? "dev"
-})
+const cli = Command.run(root, { version: resolveVersionDetails().version })
 
-BunRuntime.runMain(
-  cli.pipe(Effect.provide(AppLayer), Effect.provide(BunServices.layer))
-)
+/**
+ * BunServices supplies FileSystem/Path/Stdio/Terminal/Spawner. AppLayer's
+ * members depend on those, and so does the CLI runtime itself, so
+ * `provideMerge` is required rather than `provide`: it satisfies AppLayer's
+ * requirements AND keeps the platform services in the output for the command
+ * handlers. Plain `provide` would consume them and leave the CLI unable to
+ * resolve Stdio.
+ */
+const MainLayer = Layer.provideMerge(AppLayer, BunServices.layer)
+
+BunRuntime.runMain(cli.pipe(Effect.provide(MainLayer)))

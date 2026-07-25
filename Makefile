@@ -1,9 +1,9 @@
-.PHONY: dev build test check fmt fmt-check tidy-check cross-build package site-check release-check
+.PHONY: dev build test check typecheck lint fmt fmt-check lock-check cross-build package site-check release-check
 
 # Forward additional make goals and ARGS to the CLI, so both
 # `make dev login` and `make dev ARGS="search cats --limit 5"` work.
 dev:
-	go run ./cmd/oytc $(filter-out dev,$(MAKECMDGOALS)) $(ARGS)
+	bun run src/main.ts $(filter-out dev,$(MAKECMDGOALS)) $(ARGS)
 
 # Treat positional CLI arguments as no-op make targets after `dev` runs,
 # while still failing normally for unknown standalone targets.
@@ -13,34 +13,46 @@ dev:
 	fi
 
 build:
-	go build -o bin/oytc ./cmd/oytc
+	bun build --compile --outfile=bin/oytc src/main.ts
 
 test:
-	go test ./...
+	bun test
 
-check:
-	go vet ./...
-	go test ./...
+typecheck:
+	./node_modules/.bin/tsc -p tsconfig.json
 
-fmt:
-	gofmt -w .
+check: typecheck test
+
+# Effect language-service diagnostics; advisory, beyond what tsc reports.
+lint:
+	./node_modules/.bin/effect-tsgo diagnostics --project tsconfig.json --format text
 
 # --- release/site validation -------------------------------------------------
 
+# No formatter is configured: the repo has no prettier/biome dependency and Bun
+# ships no `bun fmt`. These targets exist so the documented workflow keeps
+# working; CI enforces correctness through typecheck + tests instead.
+fmt:
+	@echo "fmt: no formatter configured for this repo; nothing to do"
+
 fmt-check:
-	@unformatted="$$(gofmt -l .)"; if [ -n "$$unformatted" ]; then \
-		echo "gofmt required for:" >&2; echo "$$unformatted" >&2; exit 1; fi
+	@echo "fmt-check: no formatter configured for this repo; nothing to check"
 
-tidy-check:
-	go mod tidy
-	git diff --exit-code go.mod go.sum
+# The committed lockfile must already satisfy package.json (CI's equivalent of
+# the old `go mod tidy` check). Run standalone; it touches node_modules.
+lock-check:
+	bun install --frozen-lockfile
+	git diff --exit-code bun.lock
 
-# Cross-compile every release platform without producing artifacts.
+# Compile every release platform without keeping artifacts. Mirrors PLATFORMS
+# in scripts/package.sh and the cross-build job in .depot/workflows/ci.yml.
+# windows/arm64 is absent: bun has no bun-windows-arm64 --compile target.
 cross-build:
-	@set -e; for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do \
-		echo "== $$platform =="; \
-		CGO_ENABLED=0 GOOS="$${platform%/*}" GOARCH="$${platform#*/}" \
-			go build -trimpath -o /dev/null ./cmd/oytc; \
+	@set -e; for target in bun-linux-x64 bun-linux-arm64 bun-darwin-x64 bun-darwin-arm64 bun-windows-x64; do \
+		echo "== $$target =="; \
+		out="$$(mktemp -d)"; \
+		bun build --compile --target="$$target" --outfile "$$out/oytc" src/main.ts >/dev/null; \
+		rm -rf "$$out"; \
 	done
 
 # Build local release archives + checksums: make package VERSION=v0.1.0
@@ -55,5 +67,5 @@ site-check:
 	test -f site/install.ps1
 	grep -q 'davis7dotsh.github.io/open-yt-cli/install.sh' README.md
 
-release-check: fmt-check check cross-build site-check
-	go test -race ./...
+release-check: check cross-build site-check
+	@echo "release-check OK"

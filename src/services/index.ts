@@ -39,9 +39,19 @@ export interface HttpCoreRequest {
 }
 
 export interface HttpCoreShape {
+  /**
+   * `OAuthError` is in the union because a token-source failure propagates
+   * verbatim rather than being wrapped: it carries its own exit code (3 to
+   * re-login, 5 on a 429, 6 on a 5xx), and flattening it into an
+   * `OperationalError` would report every case as 6 and drop the
+   * "re-run 'oytc login --oauth'" hint.
+   */
   readonly getJson: (
     request: HttpCoreRequest
-  ) => Effect.Effect<JsonValue, ApiError | OperationalError | MissingKeyError | MissingOAuthError>
+  ) => Effect.Effect<
+    JsonValue,
+    ApiError | MissingKeyError | MissingOAuthError | OAuthError | OperationalError
+  >
 }
 
 export const HttpCore = Context.Service<HttpCoreShape>("oytc/HttpCore")

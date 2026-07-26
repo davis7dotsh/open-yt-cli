@@ -393,8 +393,11 @@ List commands support:
 ```
 
 The default is one page. `--limit` can stop an `--all` traversal early; the final page can
-leave a valid `nextPageToken` in the JSON envelope for resumption. Batch-get commands split
-IDs according to endpoint limits (50 for channels/videos/playlists, 100 for comments).
+leave a valid `nextPageToken` in the JSON envelope for resumption. When `--limit` discards
+items from the middle of a fetched page, no `nextPageToken` is reported — the server's
+token would resume *past* the discarded items and silently skip them. A limit that lands
+exactly on a page boundary keeps the token. Batch-get commands split IDs according to
+endpoint limits (50 for channels/videos/playlists, 100 for comments).
 
 Quota: most list requests cost 1 unit against the default 10,000-unit daily quota, while
 `search.list` draws from its own default bucket of 100 calls/day. See

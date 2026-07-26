@@ -70,6 +70,10 @@ func exitCode(err error) int {
 	}
 	var apiErr *youtube.APIError
 	if errors.As(err, &apiErr) {
+		// One normalization applies to every reason test below: Google returns
+		// camelCase reasons on older API surfaces (userRateLimitExceeded) and
+		// SCREAMING_SNAKE on newer ones (RATE_LIMIT_EXCEEDED), so separator
+		// characters carry no signal and must not affect classification.
 		reasons := strings.ToLower(strings.Join(apiErr.Reasons, ","))
 		normalizedReasons := strings.NewReplacer("_", "", "-", "").Replace(reasons)
 		if strings.Contains(normalizedReasons, "keyinvalid") || strings.Contains(normalizedReasons, "apikeyinvalid") || strings.Contains(normalizedReasons, "accessnotconfigured") || strings.Contains(normalizedReasons, "insufficientpermissions") || apiErr.HTTPStatus == 401 {
@@ -78,7 +82,7 @@ func exitCode(err error) int {
 		if apiErr.HTTPStatus == 404 {
 			return 4
 		}
-		if apiErr.HTTPStatus == 429 || strings.Contains(strings.ToLower(reasons), "quota") || strings.Contains(strings.ToLower(reasons), "ratelimit") {
+		if apiErr.HTTPStatus == 429 || strings.Contains(normalizedReasons, "quota") || strings.Contains(normalizedReasons, "ratelimit") {
 			return 5
 		}
 		if apiErr.HTTPStatus == 403 {

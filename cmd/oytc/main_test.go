@@ -57,7 +57,11 @@ func TestExitCodes(t *testing.T) {
 		{"not found", &youtube.APIError{HTTPStatus: 404, Code: 404}, 4},
 		{"local not found", errors.New("videos not found: missing"), 4},
 		{"quota", &youtube.APIError{HTTPStatus: 403, Code: 403, Reasons: []string{"quotaExceeded"}}, 5},
+		{"quota uppercase underscore", &youtube.APIError{HTTPStatus: 403, Code: 403, Reasons: []string{"QUOTA_EXCEEDED"}}, 5},
 		{"rate limit", &youtube.APIError{HTTPStatus: 429, Code: 429}, 5},
+		{"rate limit camel case", &youtube.APIError{HTTPStatus: 403, Code: 403, Reasons: []string{"userRateLimitExceeded"}}, 5},
+		{"rate limit uppercase underscore", &youtube.APIError{HTTPStatus: 403, Code: 403, Reasons: []string{"RATE_LIMIT_EXCEEDED"}}, 5},
+		{"rate limit hyphenated", &youtube.APIError{HTTPStatus: 403, Code: 403, Reasons: []string{"rate-limit-exceeded"}}, 5},
 		{"upstream", &youtube.APIError{HTTPStatus: 503, Code: 503}, 6},
 	}
 	for _, test := range tests {

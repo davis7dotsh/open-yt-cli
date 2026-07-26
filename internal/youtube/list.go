@@ -23,6 +23,13 @@ type ListResult struct {
 	Requests      int              `json:"requests"`
 }
 
+// MaxListRequests bounds the `--all` pagination loop. It is deliberately far
+// above any real result set: at the largest page size any endpoint accepts
+// (2000, live chat) it allows 20,000,000 items, and every other endpoint caps
+// at 50 or 100 per page. A legitimate `--all` cannot reach it, so hitting it
+// means the server is not terminating.
+const MaxListRequests = 10000
+
 func (c *Client) List(ctx context.Context, resource string, params url.Values, options PageOptions) (ListResult, error) {
 	if options.PageSize > 0 {
 		params.Set("maxResults", fmt.Sprint(options.PageSize))
@@ -31,6 +38,7 @@ func (c *Client) List(ctx context.Context, resource string, params url.Values, o
 		params.Set("pageToken", options.PageToken)
 	}
 	result := ListResult{Items: make([]map[string]any, 0)}
+	seenTokens := make(map[string]struct{})
 	for {
 		response, err := c.Get(ctx, resource, params)
 		if err != nil {
@@ -47,15 +55,38 @@ func (c *Client) List(ctx context.Context, resource string, params url.Values, o
 			}
 			items = filtered
 		}
+		truncated := false
 		if options.Limit > 0 && len(result.Items)+len(items) > options.Limit {
 			items = items[:options.Limit-len(result.Items)]
+			truncated = true
 		}
 		result.Items = append(result.Items, items...)
-		result.NextPageToken = response.NextPageToken
-		if !options.All || response.NextPageToken == "" || (options.Limit > 0 && len(result.Items) >= options.Limit) {
+		// A page from which items were discarded reports no resume token:
+		// the server's token points past the discarded tail, so resuming from
+		// it would silently skip data. A page trimmed to exactly its own
+		// length is not truncated and keeps its token.
+		if truncated {
+			result.NextPageToken = ""
+		} else {
+			result.NextPageToken = response.NextPageToken
+		}
+		if !options.All || result.NextPageToken == "" || (options.Limit > 0 && len(result.Items) >= options.Limit) {
 			break
 		}
-		params.Set("pageToken", response.NextPageToken)
+		// A token we have already followed can only return the same page
+		// again. Stop and report "", which correctly says "no valid resume
+		// point" rather than handing back a token that loops.
+		if _, seen := seenTokens[result.NextPageToken]; seen {
+			result.NextPageToken = ""
+			break
+		}
+		seenTokens[result.NextPageToken] = struct{}{}
+		// Backstop for a server that emits distinct tokens forever, which the
+		// loop check cannot catch.
+		if result.Requests >= MaxListRequests {
+			return result, fmt.Errorf("pagination did not terminate after %d requests (the server kept returning a nextPageToken); re-run with --limit to bound the result", MaxListRequests)
+		}
+		params.Set("pageToken", result.NextPageToken)
 	}
 	return result, nil
 }

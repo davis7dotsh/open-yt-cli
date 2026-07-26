@@ -3,10 +3,12 @@ package youtube
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -146,8 +148,73 @@ func TestListPaginationLimitAndToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Items) != 3 || result.Requests != 2 || result.NextPageToken != "unused" {
+	// The second page was truncated (item "4" discarded), so the server's
+	// token must not be reported: resuming from it would skip the discarded
+	// item.
+	if len(result.Items) != 3 || result.Requests != 2 || result.NextPageToken != "" {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestListExactLimitBoundaryKeepsToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"items":[{"id":"1"},{"id":"2"}],"nextPageToken":"resume"}`))
+	}))
+	defer server.Close()
+
+	// The limit consumes the page exactly; nothing was discarded, so the
+	// token is a valid resume point and must be kept.
+	result, err := testClient(server, "key").List(context.Background(), "playlistItems", url.Values{}, PageOptions{All: true, Limit: 2, PageSize: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 2 || result.NextPageToken != "resume" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestListStopsOnRepeatedPageToken(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"items":[{"id":"1"}],"nextPageToken":"loop"}`))
+	}))
+	defer server.Close()
+
+	result, err := testClient(server, "key").List(context.Background(), "search", url.Values{}, PageOptions{All: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// First page yields token "loop"; the second page repeats it, which can
+	// only re-fetch the same page, so the loop stops and reports no resume
+	// point instead of iterating forever.
+	if result.Requests != 2 || requests.Load() != 2 {
+		t.Fatalf("requests = %d (server saw %d), want 2", result.Requests, requests.Load())
+	}
+	if result.NextPageToken != "" {
+		t.Fatalf("NextPageToken = %q, want empty", result.NextPageToken)
+	}
+}
+
+func TestListRequestCeiling(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Every page returns a distinct token, so loop detection never fires
+		// and only the request ceiling can end the pagination.
+		token := requests.Add(1)
+		fmt.Fprintf(w, `{"items":[{"id":"x"}],"nextPageToken":"t%d"}`, token)
+	}))
+	defer server.Close()
+
+	result, err := testClient(server, "key").List(context.Background(), "search", url.Values{}, PageOptions{All: true})
+	if err == nil {
+		t.Fatal("expected an error after hitting the request ceiling")
+	}
+	if !strings.Contains(err.Error(), "pagination did not terminate") || !strings.Contains(err.Error(), "--limit") {
+		t.Fatalf("error = %v", err)
+	}
+	if result.Requests != MaxListRequests {
+		t.Fatalf("requests = %d, want %d", result.Requests, MaxListRequests)
 	}
 }
 

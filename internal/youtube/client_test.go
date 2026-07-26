@@ -196,6 +196,35 @@ func TestListStopsOnRepeatedPageToken(t *testing.T) {
 	}
 }
 
+func TestListStopsWhenInitialPageTokenIsEchoed(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.URL.Query().Get("pageToken") != "start" {
+			t.Errorf("pageToken = %q", r.URL.Query().Get("pageToken"))
+		}
+		// The server echoes the caller's starting token as nextPageToken.
+		_, _ = w.Write([]byte(`{"items":[{"id":"1"}],"nextPageToken":"start"}`))
+	}))
+	defer server.Close()
+
+	result, err := testClient(server, "key").List(context.Background(), "search", url.Values{}, PageOptions{All: true, PageToken: "start"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Following the echoed token would re-fetch the same page, so the loop
+	// must stop after one request without duplicating its items.
+	if result.Requests != 1 || requests.Load() != 1 {
+		t.Fatalf("requests = %d (server saw %d), want 1", result.Requests, requests.Load())
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("items = %d, want 1", len(result.Items))
+	}
+	if result.NextPageToken != "" {
+		t.Fatalf("NextPageToken = %q, want empty", result.NextPageToken)
+	}
+}
+
 func TestListRequestCeiling(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

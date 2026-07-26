@@ -38,7 +38,12 @@ func (c *Client) List(ctx context.Context, resource string, params url.Values, o
 		params.Set("pageToken", options.PageToken)
 	}
 	result := ListResult{Items: make([]map[string]any, 0)}
+	// Seed with the caller's starting token: a server echoing it back is the
+	// same loop as any other repeated token and must not re-fetch the page.
 	seenTokens := make(map[string]struct{})
+	if options.PageToken != "" {
+		seenTokens[options.PageToken] = struct{}{}
+	}
 	for {
 		response, err := c.Get(ctx, resource, params)
 		if err != nil {

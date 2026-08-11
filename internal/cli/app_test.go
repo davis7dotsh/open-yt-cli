@@ -169,6 +169,10 @@ func TestAnalyticsRequiresOAuthAndValidDates(t *testing.T) {
 	if !errors.Is(err, youtube.ErrMissingOAuth) || !bytes.Contains([]byte(err.Error()), []byte("login --oauth")) {
 		t.Fatalf("expected missing OAuth hint, got %T: %v", err, err)
 	}
+	err = execute(t, app, "analytics", "video", "video;country==US")
+	if !errors.As(err, &usage) {
+		t.Fatalf("expected invalid video ID usage error, got %T: %v", err, err)
+	}
 }
 
 func TestStatusHidesOAuthSecretsAndLogoutRevokes(t *testing.T) {

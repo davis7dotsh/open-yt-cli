@@ -1,6 +1,7 @@
 package youtube
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -116,6 +117,19 @@ func TestGetRefusesCrossOriginCredentialRedirect(t *testing.T) {
 	}
 	if redirectedRequests.Load() != 0 {
 		t.Fatalf("redirect target received %d request(s)", redirectedRequests.Load())
+	}
+}
+
+func TestGetRejectsOversizedResponse(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), maxResponseBytes+1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	client := testClient(server, "key")
+	if _, err := client.Get(context.Background(), "videos", url.Values{}); err == nil || !strings.Contains(err.Error(), "response exceeds") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

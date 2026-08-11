@@ -17,6 +17,7 @@ import (
 )
 
 const DefaultBaseURL = "https://www.googleapis.com/youtube/v3"
+const maxResponseBytes = 16 << 20
 
 type TokenSource func(context.Context, bool) (string, error)
 
@@ -117,10 +118,16 @@ func (c *Client) GetJSON(ctx context.Context, resource string, params url.Values
 			transientAttempt++
 			continue
 		}
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
-		resp.Body.Close()
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+		closeErr := resp.Body.Close()
 		if readErr != nil {
 			return fmt.Errorf("read YouTube API response: %w", readErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close YouTube API response: %w", closeErr)
+		}
+		if len(body) > maxResponseBytes {
+			return fmt.Errorf("read YouTube API response: response exceeds %d bytes", maxResponseBytes)
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			if authenticate && c.TokenSource != nil && resp.StatusCode == http.StatusUnauthorized && !authRetried {

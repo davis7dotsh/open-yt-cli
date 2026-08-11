@@ -95,6 +95,53 @@ func TestGetWithoutAuthenticationSendsNoKey(t *testing.T) {
 	}
 }
 
+func TestGetRefusesCrossOriginCredentialRedirect(t *testing.T) {
+	var redirectedRequests atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		redirectedRequests.Add(1)
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Goog-Api-Key") != "super-secret" {
+			t.Errorf("source key header = %q", r.Header.Get("X-Goog-Api-Key"))
+		}
+		http.Redirect(w, r, target.URL+"/stolen", http.StatusFound)
+	}))
+	defer source.Close()
+
+	client := testClient(source, "super-secret")
+	_, err := client.Get(context.Background(), "videos", url.Values{})
+	if err == nil || !strings.Contains(err.Error(), "origin-changing redirect") {
+		t.Fatalf("error = %v", err)
+	}
+	if redirectedRequests.Load() != 0 {
+		t.Fatalf("redirect target received %d request(s)", redirectedRequests.Load())
+	}
+}
+
+func TestGetAllowsSameOriginCredentialRedirect(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/youtube/v3/videos" {
+			http.Redirect(w, r, "/youtube/v3/redirected", http.StatusFound)
+			return
+		}
+		if r.Header.Get("X-Goog-Api-Key") != "super-secret" {
+			t.Errorf("redirected key header = %q", r.Header.Get("X-Goog-Api-Key"))
+		}
+		_, _ = w.Write([]byte(`{"items":[{"id":"ok"}]}`))
+	}))
+	defer server.Close()
+
+	client := testClient(server, "super-secret")
+	response, err := client.Get(context.Background(), "videos", url.Values{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Items[0]["id"] != "ok" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func TestStructuredAPIErrorAndRetry(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

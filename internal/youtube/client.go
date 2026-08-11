@@ -189,10 +189,35 @@ func parseAPIError(status int, body []byte) *APIError {
 }
 
 func (c *Client) httpClient() *http.Client {
+	var client *http.Client
 	if c.HTTPClient != nil {
-		return c.HTTPClient
+		client = c.HTTPClient
+	} else {
+		client = &http.Client{Timeout: 20 * time.Second}
 	}
-	return &http.Client{Timeout: 20 * time.Second}
+	clone := *client
+	originalRedirectPolicy := client.CheckRedirect
+	clone.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > 0 && hasCredentials(via[0]) && !sameOrigin(via[0].URL, req.URL) {
+			return errors.New("refusing to forward API credentials across an origin-changing redirect")
+		}
+		if originalRedirectPolicy != nil {
+			return originalRedirectPolicy(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &clone
+}
+
+func hasCredentials(req *http.Request) bool {
+	return req.Header.Get("Authorization") != "" || req.Header.Get("X-Goog-Api-Key") != ""
+}
+
+func sameOrigin(left, right *url.URL) bool {
+	return strings.EqualFold(left.Scheme, right.Scheme) && strings.EqualFold(left.Host, right.Host)
 }
 
 func (c *Client) wait(ctx context.Context, d time.Duration) error {

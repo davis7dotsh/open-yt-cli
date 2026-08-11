@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -283,6 +284,51 @@ func TestUpdateMissingAssetForPlatform(t *testing.T) {
 	_, err := f.updater.Run(context.Background(), Options{})
 	if err == nil || !strings.Contains(err.Error(), "no asset") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestValidateAssetURLsRejectsInsecureOrInvalidURLs(t *testing.T) {
+	if err := validateAssetURLs("https://api.github.com", "https://github.com/archive", "https://github.com/checksums"); err != nil {
+		t.Fatal(err)
+	}
+	for _, asset := range []string{"http://github.com/archive", "file:///tmp/archive", "/relative/archive"} {
+		if err := validateAssetURLs("https://api.github.com", asset); err == nil {
+			t.Fatalf("validateAssetURLs accepted %q", asset)
+		}
+	}
+	if err := validateAssetURLs("http://127.0.0.1:8080", "http://127.0.0.1:8080/archive"); err != nil {
+		t.Fatalf("local HTTP fixture was rejected: %v", err)
+	}
+}
+
+func TestUpdaterRefusesHTTPSRedirectDowngrade(t *testing.T) {
+	var targetRequests atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		targetRequests.Add(1)
+	}))
+	defer target.Close()
+	source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer source.Close()
+
+	updater := Updater{HTTPClient: source.Client()}
+	if _, err := updater.get(context.Background(), source.URL, 1024, ""); err == nil || !strings.Contains(err.Error(), "insecure URL") {
+		t.Fatalf("error = %v", err)
+	}
+	if targetRequests.Load() != 0 {
+		t.Fatalf("insecure redirect target received %d request(s)", targetRequests.Load())
+	}
+}
+
+func TestCopyWithLimitRejectsOversizedContent(t *testing.T) {
+	var output bytes.Buffer
+	written, err := copyWithLimit(&output, strings.NewReader("12345"), 4)
+	if err == nil || !strings.Contains(err.Error(), "exceeds 4 bytes") {
+		t.Fatalf("copyWithLimit error = %v", err)
+	}
+	if written != 5 {
+		t.Fatalf("written = %d, want 5", written)
 	}
 }
 

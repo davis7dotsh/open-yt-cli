@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -145,6 +146,9 @@ func (u *Updater) Run(ctx context.Context, options Options) (Result, error) {
 	if err != nil {
 		return result, err
 	}
+	if err := validateAssetURLs(u.apiBaseURL(), assetURL, checksumsURL); err != nil {
+		return result, err
+	}
 	expected, err := u.fetchChecksum(ctx, checksumsURL, result.AssetName)
 	if err != nil {
 		return result, err
@@ -196,10 +200,27 @@ func (u *Updater) goarch() string {
 }
 
 func (u *Updater) httpClient() *http.Client {
+	var client *http.Client
 	if u.HTTPClient != nil {
-		return u.HTTPClient
+		client = u.HTTPClient
+	} else {
+		client = &http.Client{Timeout: 5 * time.Minute}
 	}
-	return &http.Client{Timeout: 5 * time.Minute}
+	clone := *client
+	originalRedirectPolicy := client.CheckRedirect
+	clone.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > 0 && strings.EqualFold(via[0].URL.Scheme, "https") && !strings.EqualFold(req.URL.Scheme, "https") {
+			return errors.New("refusing to follow an HTTPS download redirect to an insecure URL")
+		}
+		if originalRedirectPolicy != nil {
+			return originalRedirectPolicy(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &clone
 }
 
 func (u *Updater) apiBaseURL() string {
@@ -286,6 +307,23 @@ func findAssets(release Release, assetName string) (assetURL, checksumsURL strin
 	return assetURL, checksumsURL, nil
 }
 
+func validateAssetURLs(apiBase string, assets ...string) error {
+	base, err := url.Parse(apiBase)
+	if err != nil {
+		return fmt.Errorf("parse release API URL: %w", err)
+	}
+	for _, asset := range assets {
+		parsed, err := url.Parse(asset)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return fmt.Errorf("release metadata contains an invalid asset URL %q", asset)
+		}
+		if strings.EqualFold(base.Scheme, "https") && !strings.EqualFold(parsed.Scheme, "https") {
+			return fmt.Errorf("release metadata points an HTTPS update at an insecure asset URL %q", asset)
+		}
+	}
+	return nil
+}
+
 func (u *Updater) fetchChecksum(ctx context.Context, url, assetName string) (string, error) {
 	body, err := u.get(ctx, url, maxChecksumBytes, "")
 	if err != nil {
@@ -340,7 +378,7 @@ func (u *Updater) downloadVerified(ctx context.Context, url, expected string) (s
 	}
 	tmpName := tmp.Name()
 	hasher := sha256.New()
-	_, copyErr := io.Copy(io.MultiWriter(tmp, hasher), io.LimitReader(resp.Body, maxArchiveBytes))
+	_, copyErr := copyWithLimit(io.MultiWriter(tmp, hasher), resp.Body, maxArchiveBytes)
 	closeErr := tmp.Close()
 	if copyErr != nil || closeErr != nil {
 		os.Remove(tmpName)
@@ -427,7 +465,7 @@ func writeBinaryTemp(content io.Reader, want string) (string, error) {
 		return "", err
 	}
 	tmpName := tmp.Name()
-	_, copyErr := io.Copy(tmp, io.LimitReader(content, maxArchiveBytes))
+	_, copyErr := copyWithLimit(tmp, content, maxArchiveBytes)
 	closeErr := tmp.Close()
 	if copyErr != nil || closeErr != nil {
 		os.Remove(tmpName)
@@ -438,6 +476,17 @@ func writeBinaryTemp(content io.Reader, want string) (string, error) {
 		return "", err
 	}
 	return tmpName, nil
+}
+
+func copyWithLimit(destination io.Writer, source io.Reader, limit int64) (int64, error) {
+	written, err := io.Copy(destination, io.LimitReader(source, limit+1))
+	if err != nil {
+		return written, err
+	}
+	if written > limit {
+		return written, fmt.Errorf("content exceeds %d bytes", limit)
+	}
+	return written, nil
 }
 
 // replaceExecutable atomically swaps the new binary into place. The staged

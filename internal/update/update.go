@@ -24,6 +24,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -33,6 +34,8 @@ import (
 var (
 	defaultGOOS   = runtime.GOOS
 	defaultGOARCH = runtime.GOARCH
+	releaseTagRE  = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$`)
+	repositoryRE  = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 )
 
 // DefaultRepo is the canonical GitHub repository for oytc releases.
@@ -146,7 +149,7 @@ func (u *Updater) Run(ctx context.Context, options Options) (Result, error) {
 	if err != nil {
 		return result, err
 	}
-	if err := validateAssetURLs(u.apiBaseURL(), assetURL, checksumsURL); err != nil {
+	if err := validateAssetURLs(u.apiBaseURL(), u.repo(), release.TagName, assetURL, result.AssetName, checksumsURL, ChecksumsName); err != nil {
 		return result, err
 	}
 	expected, err := u.fetchChecksum(ctx, checksumsURL, result.AssetName)
@@ -212,6 +215,9 @@ func (u *Updater) httpClient() *http.Client {
 		if len(via) > 0 && strings.EqualFold(via[0].URL.Scheme, "https") && !strings.EqualFold(req.URL.Scheme, "https") {
 			return errors.New("refusing to follow an HTTPS download redirect to an insecure URL")
 		}
+		if len(via) > 0 && u.APIBaseURL == "" && !isGitHubReleaseHost(req.URL.Hostname()) {
+			return fmt.Errorf("refusing update redirect to unexpected host %q", req.URL.Hostname())
+		}
 		if originalRedirectPolicy != nil {
 			return originalRedirectPolicy(req, via)
 		}
@@ -221,6 +227,11 @@ func (u *Updater) httpClient() *http.Client {
 		return nil
 	}
 	return &clone
+}
+
+func isGitHubReleaseHost(host string) bool {
+	host = strings.ToLower(host)
+	return host == "api.github.com" || host == "github.com" || strings.HasSuffix(host, ".githubusercontent.com")
 }
 
 func (u *Updater) apiBaseURL() string {
@@ -238,12 +249,19 @@ func (u *Updater) repo() string {
 }
 
 func (u *Updater) resolveRelease(ctx context.Context, tag string) (Release, error) {
-	endpoint := u.apiBaseURL() + "/repos/" + u.repo() + "/releases/latest"
+	repository := u.repo()
+	if !repositoryRE.MatchString(repository) {
+		return Release{}, fmt.Errorf("invalid GitHub repository %q", repository)
+	}
+	endpoint := u.apiBaseURL() + "/repos/" + repository + "/releases/latest"
+	requestedTag := ""
 	if tag != "" {
-		if !strings.HasPrefix(tag, "v") {
-			tag = "v" + tag
+		var err error
+		requestedTag, err = normalizeReleaseTag(tag)
+		if err != nil {
+			return Release{}, err
 		}
-		endpoint = u.apiBaseURL() + "/repos/" + u.repo() + "/releases/tags/" + tag
+		endpoint = u.apiBaseURL() + "/repos/" + repository + "/releases/tags/" + url.PathEscape(requestedTag)
 	}
 	body, err := u.get(ctx, endpoint, maxMetadataBytes, "application/vnd.github+json")
 	if err != nil {
@@ -256,7 +274,24 @@ func (u *Updater) resolveRelease(ctx context.Context, tag string) (Release, erro
 	if release.TagName == "" {
 		return Release{}, errors.New("release metadata is missing a tag name")
 	}
+	if requestedTag != "" && release.TagName != requestedTag {
+		return Release{}, fmt.Errorf("release metadata tag %q does not match requested tag %q", release.TagName, requestedTag)
+	}
+	if !releaseTagRE.MatchString(release.TagName) {
+		return Release{}, fmt.Errorf("release metadata contains invalid tag %q", release.TagName)
+	}
 	return release, nil
+}
+
+func normalizeReleaseTag(tag string) (string, error) {
+	tag = strings.TrimSpace(tag)
+	if !strings.HasPrefix(tag, "v") {
+		tag = "v" + tag
+	}
+	if !releaseTagRE.MatchString(tag) {
+		return "", fmt.Errorf("invalid release version %q: expected a v-prefixed semantic version", tag)
+	}
+	return tag, nil
 }
 
 func (u *Updater) get(ctx context.Context, url string, limit int64, accept string) ([]byte, error) {
@@ -307,18 +342,30 @@ func findAssets(release Release, assetName string) (assetURL, checksumsURL strin
 	return assetURL, checksumsURL, nil
 }
 
-func validateAssetURLs(apiBase string, assets ...string) error {
+func validateAssetURLs(apiBase, repository, tag, assetURL, assetName, checksumsURL, checksumsName string) error {
 	base, err := url.Parse(apiBase)
 	if err != nil {
 		return fmt.Errorf("parse release API URL: %w", err)
 	}
-	for _, asset := range assets {
-		parsed, err := url.Parse(asset)
+	for _, asset := range []struct {
+		url  string
+		name string
+	}{
+		{assetURL, assetName},
+		{checksumsURL, checksumsName},
+	} {
+		parsed, err := url.Parse(asset.url)
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-			return fmt.Errorf("release metadata contains an invalid asset URL %q", asset)
+			return fmt.Errorf("release metadata contains an invalid asset URL %q", asset.url)
 		}
 		if strings.EqualFold(base.Scheme, "https") && !strings.EqualFold(parsed.Scheme, "https") {
-			return fmt.Errorf("release metadata points an HTTPS update at an insecure asset URL %q", asset)
+			return fmt.Errorf("release metadata points an HTTPS update at an insecure asset URL %q", asset.url)
+		}
+		if strings.EqualFold(base.Hostname(), "api.github.com") {
+			expectedPath := "/" + repository + "/releases/download/" + tag + "/" + asset.name
+			if !strings.EqualFold(parsed.Hostname(), "github.com") || parsed.Path != expectedPath {
+				return fmt.Errorf("release metadata contains an unexpected GitHub asset URL %q", asset.url)
+			}
 		}
 	}
 	return nil

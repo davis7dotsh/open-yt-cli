@@ -25,12 +25,17 @@ func TestJSONPreservesLargeCounterString(t *testing.T) {
 }
 
 func TestTSVColumnsAndSanitization(t *testing.T) {
-	result := youtube.ListResult{Items: []map[string]any{{"id": "v", "snippet": map[string]any{"title": "line one\nline two"}}}}
+	result := youtube.ListResult{Items: []map[string]any{{
+		"id": "v",
+		"snippet": map[string]any{
+			"title": "line one\nline two\x1b]52;c;YXR0YWNr\a\u0085",
+		},
+	}}}
 	var buffer bytes.Buffer
 	if err := Render(&buffer, result, Options{Format: "tsv", Columns: []string{"id", "snippet.title"}}); err != nil {
 		t.Fatal(err)
 	}
-	want := "ID\tSNIPPET.TITLE\nv\tline one line two\n"
+	want := "ID\tSNIPPET.TITLE\nv\tline one line two ]52;c;YXR0YWNr  \n"
 	if buffer.String() != want {
 		t.Fatalf("TSV = %q, want %q", buffer.String(), want)
 	}

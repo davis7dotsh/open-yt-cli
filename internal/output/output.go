@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"unicode"
 
 	"open-yt-cli/internal/youtube"
 )
@@ -78,7 +79,7 @@ func renderRows(w io.Writer, items []map[string]any, options Options) error {
 			if i > 0 {
 				fmt.Fprint(target, "\t")
 			}
-			fmt.Fprint(target, strings.ToUpper(column))
+			fmt.Fprint(target, clean(strings.ToUpper(column)))
 		}
 		fmt.Fprintln(target)
 	}
@@ -147,5 +148,10 @@ func cell(value any) string {
 }
 
 func clean(value string) string {
-	return strings.NewReplacer("\t", " ", "\r", " ", "\n", " ").Replace(value)
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, value)
 }

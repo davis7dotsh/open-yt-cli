@@ -88,7 +88,14 @@ func renderRows(w io.Writer, items []map[string]any, options Options) error {
 			if i > 0 {
 				fmt.Fprint(target, "\t")
 			}
-			fmt.Fprint(target, cell(pathValue(item, column)))
+			value := pathValue(item, column)
+			rendered := cell(value)
+			if options.Format == "tsv" {
+				if _, ok := value.(string); ok {
+					rendered = spreadsheetSafe(rendered)
+				}
+			}
+			fmt.Fprint(target, rendered)
 		}
 		fmt.Fprintln(target)
 	}
@@ -154,4 +161,12 @@ func clean(value string) string {
 		}
 		return r
 	}, value)
+}
+
+func spreadsheetSafe(value string) string {
+	trimmed := strings.TrimLeftFunc(value, unicode.IsSpace)
+	if trimmed != "" && strings.ContainsRune("=+-@", rune(trimmed[0])) {
+		return "'" + value
+	}
+	return value
 }

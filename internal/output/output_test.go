@@ -41,6 +41,21 @@ func TestTSVColumnsAndSanitization(t *testing.T) {
 	}
 }
 
+func TestTSVNeutralizesSpreadsheetFormulasInStrings(t *testing.T) {
+	result := youtube.ListResult{Items: []map[string]any{{
+		"title": "=HYPERLINK(\"https://example.invalid\")",
+		"count": json.Number("-5"),
+	}}}
+	var buffer bytes.Buffer
+	if err := Render(&buffer, result, Options{Format: "tsv", Columns: []string{"title", "count"}, NoHeader: true}); err != nil {
+		t.Fatal(err)
+	}
+	want := "'=HYPERLINK(\"https://example.invalid\")\t-5\n"
+	if buffer.String() != want {
+		t.Fatalf("TSV = %q, want %q", buffer.String(), want)
+	}
+}
+
 func TestJSONLEmitsOneItemPerLine(t *testing.T) {
 	result := youtube.ListResult{Items: []map[string]any{{"id": "a"}, {"id": "b"}}}
 	var buffer bytes.Buffer

@@ -18,7 +18,7 @@ curl -fsSL https://davis7dotsh.github.io/open-yt-cli/install.sh | sh
 Windows (PowerShell): `irm https://davis7dotsh.github.io/open-yt-cli/install.ps1 | iex`,
 or download a zip from [releases](https://github.com/davis7dotsh/open-yt-cli/releases).
 
-From source (Go 1.26+): `go install ./cmd/oytc` from a clone, or `make build`.
+From source (Go 1.26.5+): `go install ./cmd/oytc` from a clone, or `make build`.
 
 ## Quick start
 

@@ -78,6 +78,16 @@ jobs:
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q shellcheck
           shellcheck site/install.sh scripts/package.sh
+      - name: Reject unsafe release versions
+        run: |
+          set -eu
+          marker="/tmp/oytc-tag-injection"
+          rm -f "$marker"
+          if ./scripts/package.sh 'v1.2.3"; touch /tmp/oytc-tag-injection; echo "' dist-invalid; then
+            echo "unsafe release version was accepted" >&2
+            exit 1
+          fi
+          test ! -e "$marker"
       - name: Skill structure
         run: |
           python3 - <<'EOF'

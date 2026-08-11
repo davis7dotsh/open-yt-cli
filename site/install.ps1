@@ -51,6 +51,9 @@ try {
         }
     }
     if (-not $expected) { throw "checksums.txt has no entry for $asset; refusing to install." }
+    if ($expected -notmatch '^[0-9a-f]{64}$') {
+        throw "checksums.txt contains a malformed SHA-256 digest for $asset; refusing to install."
+    }
 
     $actual = (Get-FileHash -Algorithm SHA256 -Path $zipPath).Hash.ToLowerInvariant()
     if ($actual -ne $expected) {

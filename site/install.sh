@@ -37,6 +37,24 @@ fail() {
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v tar >/dev/null 2>&1 || fail "tar is required"
 
+fetch() {
+    case "$1" in
+        https://*) curl --proto '=https' --proto-redir '=https' -fsSL "$1" ;;
+        http://127.0.0.1:* | http://localhost:*) curl -fsSL "$1" ;;
+        *) fail "refusing to download from insecure URL: $1" ;;
+    esac
+}
+
+fetch_to() {
+    output="$1"
+    url="$2"
+    case "$url" in
+        https://*) curl --proto '=https' --proto-redir '=https' -fsSL -o "$output" "$url" ;;
+        http://127.0.0.1:* | http://localhost:*) curl -fsSL -o "$output" "$url" ;;
+        *) fail "refusing to download from insecure URL: $url" ;;
+    esac
+}
+
 # --- Detect platform -------------------------------------------------------
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"
 case "$os" in
@@ -58,7 +76,7 @@ esac
 # --- Resolve version --------------------------------------------------------
 version="${OYTC_VERSION:-}"
 if [ -z "$version" ]; then
-    version="$(curl -fsSL -H 'Accept: application/vnd.github+json' "${API}/releases/latest" |
+    version="$(fetch "${API}/releases/latest" |
         awk -F '"' '/"tag_name"/ { print $4; exit }')" ||
         fail "could not query the latest release from GitHub (network or rate limit?)"
     [ -n "$version" ] || fail "no published release found for ${REPO} (releases page: https://github.com/${REPO}/releases)"
@@ -74,15 +92,24 @@ say "installing oytc ${version} (${goos}/${goarch})"
 
 # --- Download and verify ----------------------------------------------------
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/oytc-install.XXXXXX")"
-trap 'rm -rf "$workdir"' EXIT INT TERM
+staged=""
+cleanup() {
+    rm -rf "$workdir"
+    [ -z "$staged" ] || rm -f "$staged"
+}
+trap cleanup EXIT INT TERM
 
-curl -fsSL -o "${workdir}/${asset}" "${DOWNLOAD}/${version}/${asset}" ||
+fetch_to "${workdir}/${asset}" "${DOWNLOAD}/${version}/${asset}" ||
     fail "failed to download ${asset} — check that release ${version} exists and includes ${goos}/${goarch}"
-curl -fsSL -o "${workdir}/checksums.txt" "${DOWNLOAD}/${version}/checksums.txt" ||
+fetch_to "${workdir}/checksums.txt" "${DOWNLOAD}/${version}/checksums.txt" ||
     fail "failed to download checksums.txt for ${version}; refusing to install an unverified binary"
 
 expected="$(awk -v name="$asset" '$2 == name || $2 == "*"name { print tolower($1); exit }' "${workdir}/checksums.txt")"
 [ -n "$expected" ] || fail "checksums.txt has no entry for ${asset}"
+case "$expected" in
+    *[!0-9a-f]*) fail "checksums.txt contains a malformed SHA-256 digest for ${asset}" ;;
+esac
+[ "${#expected}" -eq 64 ] || fail "checksums.txt contains a malformed SHA-256 digest for ${asset}"
 
 if command -v sha256sum >/dev/null 2>&1; then
     actual="$(sha256sum "${workdir}/${asset}" | awk '{print tolower($1)}')"
@@ -116,10 +143,12 @@ else
 fi
 
 # Atomic move into place (staging file in the destination directory).
-staged="${destination}/.oytc.new.$$"
+staged="$(mktemp "${destination}/.oytc.new.XXXXXX")" ||
+    fail "cannot create a staging file in ${destination}"
 cp "${workdir}/oytc" "$staged"
 chmod 0755 "$staged"
 mv -f "$staged" "${destination}/oytc"
+staged=""
 say "installed ${destination}/oytc"
 
 if [ "${OYTC_NO_SYMLINKS:-0}" != "1" ]; then

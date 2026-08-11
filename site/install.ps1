@@ -1,6 +1,7 @@
 # oytc installer for Windows — https://github.com/davis7dotsh/open-yt-cli
 #
-#   irm https://davis7dotsh.github.io/open-yt-cli/install.ps1 | iex
+#   irm https://davis7dotsh.github.io/open-yt-cli/install.ps1 -OutFile install.ps1
+#   & .\install.ps1
 #
 # Optional environment variables:
 #   OYTC_VERSION      release tag to install, e.g. v0.2.0 (default: latest)
@@ -29,6 +30,9 @@ if (-not $version) {
     if (-not $version) { throw "No published release found for $Repo." }
 } elseif ($version -notmatch '^v') {
     $version = "v$version"
+}
+if ($version -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$') {
+    throw "Release version must be a v-prefixed semantic version (got '$version')."
 }
 
 $asset = "oytc_${version}_windows_${arch}.zip"
@@ -60,9 +64,16 @@ try {
         throw "SHA-256 mismatch for ${asset}: expected $expected, got $actual; refusing to install."
     }
 
-    Expand-Archive -Path $zipPath -DestinationPath (Join-Path $work 'extracted') -Force
-    $binary = Join-Path $work 'extracted\oytc.exe'
-    if (-not (Test-Path $binary)) { throw 'Archive did not contain oytc.exe.' }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($zipPath)
+    try {
+        $entries = @($archive.Entries | Where-Object { $_.FullName -ceq 'oytc.exe' -and $_.Name -ceq 'oytc.exe' })
+        if ($entries.Count -ne 1) { throw 'Archive must contain exactly one top-level oytc.exe.' }
+        $binary = Join-Path $work 'oytc.exe'
+        [IO.Compression.ZipFileExtensions]::ExtractToFile($entries[0], $binary)
+    } finally {
+        $archive.Dispose()
+    }
 
     $destination = $env:OYTC_INSTALL_DIR
     if (-not $destination) { $destination = Join-Path $env:LOCALAPPDATA 'Programs\oytc' }

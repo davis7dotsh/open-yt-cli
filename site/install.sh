@@ -1,7 +1,8 @@
 #!/bin/sh
 # oytc installer — https://github.com/davis7dotsh/open-yt-cli
 #
-#   curl -fsSL https://davis7dotsh.github.io/open-yt-cli/install.sh | sh
+#   curl -fsSLO https://davis7dotsh.github.io/open-yt-cli/install.sh
+#   sh install.sh
 #
 # Options (environment variables):
 #   OYTC_VERSION      release tag to install, e.g. v0.2.0 (default: latest)
@@ -86,6 +87,9 @@ else
         *) version="v${version}" ;;
     esac
 fi
+if ! printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$'; then
+    fail "release version must be a v-prefixed semantic version (got '$version')"
+fi
 
 asset="oytc_${version}_${goos}_${goarch}.tar.gz"
 say "installing oytc ${version} (${goos}/${goarch})"
@@ -125,6 +129,7 @@ fi
 tar -xzf "${workdir}/${asset}" -C "$workdir" oytc ||
     fail "failed to extract oytc from ${asset}"
 [ -f "${workdir}/oytc" ] || fail "archive did not contain the oytc binary"
+[ ! -L "${workdir}/oytc" ] || fail "archive contained a symbolic link instead of the oytc binary"
 chmod 0755 "${workdir}/oytc"
 
 # --- Install ----------------------------------------------------------------

@@ -102,11 +102,14 @@
   </div>
 
   <h2>Install (macOS &amp; Linux)</h2>
-  <pre><code>curl -fsSL https://davis7dotsh.github.io/open-yt-cli/install.sh | sh</code></pre>
+  <pre><code>curl -fsSLO https://davis7dotsh.github.io/open-yt-cli/install.sh
+sh install.sh
+rm install.sh</code></pre>
   <p>The installer detects your platform, verifies the release's SHA-256 checksum before
   installing, and defaults to <code>~/.local/bin</code> — no root required.
   Windows: use <a href="https://davis7dotsh.github.io/open-yt-cli/install.ps1">install.ps1</a>
-  (<code>irm https://davis7dotsh.github.io/open-yt-cli/install.ps1 | iex</code>) or grab a zip from the
+  (<code>irm https://davis7dotsh.github.io/open-yt-cli/install.ps1 -OutFile install.ps1; &amp; .\install.ps1</code>)
+  or grab a zip from the
   <a href="https://github.com/davis7dotsh/open-yt-cli/releases">releases page</a>.</p>
 
   <h2>Quick setup</h2>

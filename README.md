@@ -12,10 +12,12 @@ write commands.
 macOS / Linux (verifies SHA-256 before installing; no root needed):
 
 ```sh
-curl -fsSL https://davis7dotsh.github.io/open-yt-cli/install.sh | sh
+curl -fsSLO https://davis7dotsh.github.io/open-yt-cli/install.sh
+sh install.sh
+rm install.sh
 ```
 
-Windows (PowerShell): `irm https://davis7dotsh.github.io/open-yt-cli/install.ps1 | iex`,
+Windows (PowerShell): `irm https://davis7dotsh.github.io/open-yt-cli/install.ps1 -OutFile install.ps1; & .\install.ps1`,
 or download a zip from [releases](https://github.com/davis7dotsh/open-yt-cli/releases).
 
 From source (Go 1.26.5+): `go install ./cmd/oytc` from a clone, or `make build`.
@@ -91,6 +93,9 @@ hard-block unverified apps requesting it, so verify the consent app for those ac
 - `status` shows a key fingerprint plus OAuth client ID, scopes, and expiry. It never prints
   tokens or the client secret. `logout` attempts OAuth revocation, then removes the file.
 - `oytc update` verifies release checksums and never reads or transmits credentials.
+- Release checksums detect corruption or in-transit tampering. Because the checksum manifest
+  ships in the same release, publisher authenticity still relies on the GitHub repository and
+  release workflow; releases do not yet have an independent signature.
 
 ## Scope: read-only public data + your analytics
 

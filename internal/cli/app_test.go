@@ -429,6 +429,22 @@ func TestLiveChatStreamPollsWithTokenAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestRecentIDsEvictsOldEntries(t *testing.T) {
+	seen := newRecentIDs(2)
+	if !seen.Add("a") || !seen.Add("b") || seen.Add("a") {
+		t.Fatal("recent ID set did not detect a duplicate")
+	}
+	if !seen.Add("c") {
+		t.Fatal("recent ID set rejected a new ID")
+	}
+	if len(seen.values) != 2 {
+		t.Fatalf("stored IDs = %d, want 2", len(seen.values))
+	}
+	if !seen.Add("a") {
+		t.Fatal("oldest ID was not evicted")
+	}
+}
+
 func TestCommentThreadsRejectsIncompatibleFiltersWithoutRequest(t *testing.T) {
 	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
 	t.Setenv("OYTC_API_KEY", "key")

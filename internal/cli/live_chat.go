@@ -14,6 +14,8 @@ import (
 	"open-yt-cli/internal/youtube"
 )
 
+const liveChatDedupWindow = 10000
+
 func (a *App) liveChatCommand() *cobra.Command {
 	live := &cobra.Command{Use: "live-chat", Short: "Read public live chat using REST polling"}
 	live.AddCommand(a.liveChatListCommand(), a.liveChatStreamCommand())
@@ -78,7 +80,7 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			seen := make(map[string]struct{})
+			seen := newRecentIDs(liveChatDedupWindow)
 			emitted := 0
 			firstPage := true
 			for {
@@ -93,11 +95,8 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 				items := make([]map[string]any, 0, len(response.Items))
 				for _, item := range response.Items {
 					id, _ := item["id"].(string)
-					if id != "" {
-						if _, exists := seen[id]; exists {
-							continue
-						}
-						seen[id] = struct{}{}
+					if id != "" && !seen.Add(id) {
+						continue
 					}
 					items = append(items, item)
 					if flags.limit > 0 && emitted+len(items) >= flags.limit {
@@ -137,6 +136,32 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 	}
 	addLiveChatFlags(cmd, &flags)
 	return cmd
+}
+
+type recentIDs struct {
+	values   map[string]struct{}
+	order    []string
+	next     int
+	capacity int
+}
+
+func newRecentIDs(capacity int) *recentIDs {
+	return &recentIDs{values: make(map[string]struct{}, capacity), order: make([]string, 0, capacity), capacity: capacity}
+}
+
+func (r *recentIDs) Add(value string) bool {
+	if _, exists := r.values[value]; exists {
+		return false
+	}
+	if len(r.order) < r.capacity {
+		r.order = append(r.order, value)
+	} else {
+		delete(r.values, r.order[r.next])
+		r.order[r.next] = value
+		r.next = (r.next + 1) % r.capacity
+	}
+	r.values[value] = struct{}{}
+	return true
 }
 
 func addLiveChatFlags(cmd *cobra.Command, flags *liveChatFlags) {

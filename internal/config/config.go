@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,6 +18,7 @@ const (
 	envKey               = "OYTC_API_KEY"
 	envOAuthClientID     = "OYTC_OAUTH_CLIENT_ID"
 	envOAuthClientSecret = "OYTC_OAUTH_CLIENT_SECRET"
+	maxCredentialBytes   = 1 << 20
 )
 
 type File struct {
@@ -251,12 +253,33 @@ func acquireUpdateLock(path string) (func(), error) {
 }
 
 func loadFile(path string) (File, bool, error) {
-	data, err := os.ReadFile(path)
+	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return File{}, false, nil
 	}
 	if err != nil {
-		return File{}, false, fmt.Errorf("read credentials: %w", err)
+		return File{}, false, fmt.Errorf("inspect credentials: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return File{}, true, errors.New("read credentials: auth.json must not be a symbolic link")
+	}
+	if !info.Mode().IsRegular() {
+		return File{}, true, errors.New("read credentials: auth.json must be a regular file")
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		return File{}, true, fmt.Errorf("read credentials: insecure permissions %04o on auth.json; run chmod 600", info.Mode().Perm())
+	}
+	handle, err := os.Open(path)
+	if err != nil {
+		return File{}, true, fmt.Errorf("read credentials: %w", err)
+	}
+	data, readErr := io.ReadAll(io.LimitReader(handle, maxCredentialBytes+1))
+	closeErr := handle.Close()
+	if readErr != nil || closeErr != nil {
+		return File{}, true, fmt.Errorf("read credentials: %w", errors.Join(readErr, closeErr))
+	}
+	if len(data) > maxCredentialBytes {
+		return File{}, true, fmt.Errorf("read credentials: file exceeds %d bytes", maxCredentialBytes)
 	}
 	var file File
 	if err := json.Unmarshal(data, &file); err != nil {

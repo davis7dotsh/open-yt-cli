@@ -223,7 +223,7 @@ func Revoke(ctx context.Context, cfg Config, token string) error {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	resp, err := cfg.HTTPClient.Do(req)
+	resp, err := noRedirectClient(cfg.HTTPClient).Do(req)
 	if err != nil {
 		return fmt.Errorf("revoke OAuth token: %w", err)
 	}
@@ -285,7 +285,15 @@ func (c Config) library() *oauth2.Config {
 // context injects cfg.HTTPClient into the oauth2 library, which only accepts
 // a custom client via context.
 func (c Config) context(ctx context.Context) context.Context {
-	return context.WithValue(ctx, oauth2.HTTPClient, c.HTTPClient)
+	return context.WithValue(ctx, oauth2.HTTPClient, noRedirectClient(c.HTTPClient))
+}
+
+func noRedirectClient(client *http.Client) *http.Client {
+	clone := *client
+	clone.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("OAuth endpoint redirects are not allowed")
+	}
+	return &clone
 }
 
 // fromLibrary converts an oauth2 token, inheriting the refresh token and

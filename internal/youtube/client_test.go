@@ -184,6 +184,15 @@ func TestStructuredAPIErrorAndRetry(t *testing.T) {
 	}
 }
 
+func TestBackoffCapsRetryAfter(t *testing.T) {
+	if got := backoff(0, "999999999"); got != maxRetryDelay {
+		t.Fatalf("backoff = %v, want %v", got, maxRetryDelay)
+	}
+	if got := backoff(0, "5"); got != 5*time.Second {
+		t.Fatalf("backoff = %v, want 5s", got)
+	}
+}
+
 func TestListPaginationLimitAndToken(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

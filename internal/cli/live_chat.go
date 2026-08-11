@@ -15,6 +15,7 @@ import (
 )
 
 const liveChatDedupWindow = 10000
+const maxLiveChatPollingInterval = 60 * time.Second
 
 func (a *App) liveChatCommand() *cobra.Command {
 	live := &cobra.Command{Use: "live-chat", Short: "Read public live chat using REST polling"}
@@ -121,10 +122,7 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 					return nil
 				}
 				flags.pageToken = response.NextPageToken
-				interval := time.Duration(response.PollingIntervalMillis) * time.Millisecond
-				if interval <= 0 {
-					interval = time.Second
-				}
+				interval := liveChatPollingInterval(response.PollingIntervalMillis)
 				if err := waitFor(cmd.Context(), interval); err != nil {
 					if errors.Is(err, context.Canceled) {
 						return nil
@@ -136,6 +134,16 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 	}
 	addLiveChatFlags(cmd, &flags)
 	return cmd
+}
+
+func liveChatPollingInterval(milliseconds int64) time.Duration {
+	if milliseconds <= 0 {
+		return time.Second
+	}
+	if milliseconds >= int64(maxLiveChatPollingInterval/time.Millisecond) {
+		return maxLiveChatPollingInterval
+	}
+	return time.Duration(milliseconds) * time.Millisecond
 }
 
 type recentIDs struct {

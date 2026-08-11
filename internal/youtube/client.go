@@ -18,6 +18,7 @@ import (
 
 const DefaultBaseURL = "https://www.googleapis.com/youtube/v3"
 const maxResponseBytes = 16 << 20
+const maxRetryDelay = 60 * time.Second
 
 type TokenSource func(context.Context, bool) (string, error)
 
@@ -256,8 +257,11 @@ func isTransientStatus(status int) bool {
 
 func backoff(attempt int, retryAfter string) time.Duration {
 	if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds >= 0 {
+		if seconds >= int(maxRetryDelay/time.Second) {
+			return maxRetryDelay
+		}
 		return time.Duration(seconds) * time.Second
 	}
 	base := time.Duration(1<<attempt) * 250 * time.Millisecond
-	return base + time.Duration(rand.IntN(150))*time.Millisecond
+	return min(base+time.Duration(rand.IntN(150))*time.Millisecond, maxRetryDelay)
 }

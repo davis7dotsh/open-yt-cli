@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"open-yt-cli/internal/config"
 	"open-yt-cli/internal/youtube"
@@ -446,6 +447,18 @@ func TestRecentIDsEvictsOldEntries(t *testing.T) {
 	}
 	if !seen.Add("a") {
 		t.Fatal("oldest ID was not evicted")
+	}
+}
+
+func TestLiveChatPollingIntervalIsBounded(t *testing.T) {
+	if got := liveChatPollingInterval(0); got != time.Second {
+		t.Fatalf("zero interval = %v", got)
+	}
+	if got := liveChatPollingInterval(2500); got != 2500*time.Millisecond {
+		t.Fatalf("normal interval = %v", got)
+	}
+	if got := liveChatPollingInterval(999999999); got != maxLiveChatPollingInterval {
+		t.Fatalf("large interval = %v, want %v", got, maxLiveChatPollingInterval)
 	}
 }
 

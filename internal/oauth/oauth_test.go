@@ -135,6 +135,26 @@ func TestRevoke(t *testing.T) {
 	}
 }
 
+func TestRevokeRefusesRedirects(t *testing.T) {
+	var targetRequests atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		targetRequests.Add(1)
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+
+	err := Revoke(context.Background(), Config{RevokeURL: source.URL, HTTPClient: source.Client()}, "refresh-secret")
+	if err == nil || !strings.Contains(err.Error(), "redirects are not allowed") {
+		t.Fatalf("Revoke error = %v", err)
+	}
+	if targetRequests.Load() != 0 {
+		t.Fatalf("redirect target received %d request(s)", targetRequests.Load())
+	}
+}
+
 // getCallback issues the loopback callback request with the test's context so
 // a stalled listener cannot outlive the test.
 func getCallback(t *testing.T, callback string) {

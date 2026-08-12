@@ -269,7 +269,7 @@ func TestOpenedCredentialFileUnaffectedByPathReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Rename(replacement, path); err != nil {
-		handle.Close()
+		_ = handle.Close()
 		t.Fatal(err)
 	}
 	file, err := readCredentialFile(handle)

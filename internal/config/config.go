@@ -276,12 +276,12 @@ func readCredentialFile(handle *os.File) (File, error) {
 		return File{}, fmt.Errorf("inspect credentials: %w", errors.Join(statErr, closeErr))
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		handle.Close()
-		return File{}, errors.New("read credentials: auth.json must not be a symbolic link")
+		validationErr := errors.New("read credentials: auth.json must not be a symbolic link")
+		return File{}, errors.Join(validationErr, handle.Close())
 	}
 	if !info.Mode().IsRegular() {
-		handle.Close()
-		return File{}, errors.New("read credentials: auth.json must be a regular file")
+		validationErr := errors.New("read credentials: auth.json must be a regular file")
+		return File{}, errors.Join(validationErr, handle.Close())
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		originalMode := info.Mode().Perm()
@@ -292,7 +292,7 @@ func readCredentialFile(handle *os.File) (File, error) {
 			if secureErr == nil {
 				secureErr = errors.New("filesystem did not apply mode 0600")
 			}
-			handle.Close()
+			secureErr = errors.Join(secureErr, handle.Close())
 			return File{}, fmt.Errorf(
 				"read credentials: insecure permissions %04o on auth.json; chmod 600 failed: %w",
 				originalMode,

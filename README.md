@@ -12,13 +12,31 @@ write commands.
 macOS / Linux (verifies SHA-256 before installing; no root needed):
 
 ```sh
-curl -fsSL https://davis7dotsh.github.io/open-yt-cli/install.sh | sh
+tmp="$(mktemp)" && {
+  curl --proto '=https' --proto-redir '=https' -fsSL \
+    https://davis7dotsh.github.io/open-yt-cli/install.sh -o "$tmp" &&
+    sh "$tmp"
+  status=$?
+  rm -f "$tmp"
+  (exit "$status")
+}
 ```
 
-Windows (PowerShell): `irm https://davis7dotsh.github.io/open-yt-cli/install.ps1 | iex`,
-or download a zip from [releases](https://github.com/davis7dotsh/open-yt-cli/releases).
+Windows (PowerShell):
 
-From source (Go 1.26+): `go install ./cmd/oytc` from a clone, or `make build`.
+```powershell
+$tmp = Join-Path ([IO.Path]::GetTempPath()) ("oytc-install-" + [Guid]::NewGuid() + ".ps1")
+try {
+    irm https://davis7dotsh.github.io/open-yt-cli/install.ps1 -OutFile $tmp -ErrorAction Stop
+    & $tmp
+} finally {
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+}
+```
+
+Alternatively, download a zip from [releases](https://github.com/davis7dotsh/open-yt-cli/releases).
+
+From source (Go 1.26.5+): `go install ./cmd/oytc` from a clone, or `make build`.
 
 ## Quick start
 
@@ -91,6 +109,9 @@ hard-block unverified apps requesting it, so verify the consent app for those ac
 - `status` shows a key fingerprint plus OAuth client ID, scopes, and expiry. It never prints
   tokens or the client secret. `logout` attempts OAuth revocation, then removes the file.
 - `oytc update` verifies release checksums and never reads or transmits credentials.
+- Release checksums detect corruption or in-transit tampering. Because the checksum manifest
+  ships in the same release, publisher authenticity still relies on the GitHub repository and
+  release workflow; releases do not yet have an independent signature.
 
 ## Scope: read-only public data + your analytics
 

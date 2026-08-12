@@ -17,6 +17,8 @@ import (
 )
 
 const DefaultBaseURL = "https://www.googleapis.com/youtube/v3"
+const maxResponseBytes = 16 << 20
+const maxRetryDelay = 60 * time.Second
 
 type TokenSource func(context.Context, bool) (string, error)
 
@@ -117,10 +119,16 @@ func (c *Client) GetJSON(ctx context.Context, resource string, params url.Values
 			transientAttempt++
 			continue
 		}
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
-		resp.Body.Close()
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+		closeErr := resp.Body.Close()
 		if readErr != nil {
 			return fmt.Errorf("read YouTube API response: %w", readErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close YouTube API response: %w", closeErr)
+		}
+		if len(body) > maxResponseBytes {
+			return fmt.Errorf("read YouTube API response: response exceeds %d bytes", maxResponseBytes)
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			if authenticate && c.TokenSource != nil && resp.StatusCode == http.StatusUnauthorized && !authRetried {
@@ -189,10 +197,35 @@ func parseAPIError(status int, body []byte) *APIError {
 }
 
 func (c *Client) httpClient() *http.Client {
+	var client *http.Client
 	if c.HTTPClient != nil {
-		return c.HTTPClient
+		client = c.HTTPClient
+	} else {
+		client = &http.Client{Timeout: 20 * time.Second}
 	}
-	return &http.Client{Timeout: 20 * time.Second}
+	clone := *client
+	originalRedirectPolicy := client.CheckRedirect
+	clone.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > 0 && hasCredentials(via[0]) && !sameOrigin(via[0].URL, req.URL) {
+			return errors.New("refusing to forward API credentials across an origin-changing redirect")
+		}
+		if originalRedirectPolicy != nil {
+			return originalRedirectPolicy(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &clone
+}
+
+func hasCredentials(req *http.Request) bool {
+	return req.Header.Get("Authorization") != "" || req.Header.Get("X-Goog-Api-Key") != ""
+}
+
+func sameOrigin(left, right *url.URL) bool {
+	return strings.EqualFold(left.Scheme, right.Scheme) && strings.EqualFold(left.Host, right.Host)
 }
 
 func (c *Client) wait(ctx context.Context, d time.Duration) error {
@@ -224,8 +257,17 @@ func isTransientStatus(status int) bool {
 
 func backoff(attempt int, retryAfter string) time.Duration {
 	if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds >= 0 {
+		if seconds >= int(maxRetryDelay/time.Second) {
+			return maxRetryDelay
+		}
 		return time.Duration(seconds) * time.Second
 	}
+	if attempt < 0 {
+		attempt = 0
+	}
+	if attempt >= 8 {
+		return maxRetryDelay
+	}
 	base := time.Duration(1<<attempt) * 250 * time.Millisecond
-	return base + time.Duration(rand.IntN(150))*time.Millisecond
+	return min(base+time.Duration(rand.IntN(150))*time.Millisecond, maxRetryDelay)
 }

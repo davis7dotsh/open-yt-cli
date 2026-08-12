@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"open-yt-cli/internal/config"
 	"open-yt-cli/internal/youtube"
@@ -168,6 +169,10 @@ func TestAnalyticsRequiresOAuthAndValidDates(t *testing.T) {
 	err = execute(t, app, "analytics", "report", "--metrics", "views", "--start", "2026-01-01", "--end", "2026-01-28")
 	if !errors.Is(err, youtube.ErrMissingOAuth) || !bytes.Contains([]byte(err.Error()), []byte("login --oauth")) {
 		t.Fatalf("expected missing OAuth hint, got %T: %v", err, err)
+	}
+	err = execute(t, app, "analytics", "video", "video;country==US")
+	if !errors.As(err, &usage) {
+		t.Fatalf("expected invalid video ID usage error, got %T: %v", err, err)
 	}
 }
 
@@ -426,6 +431,34 @@ func TestLiveChatStreamPollsWithTokenAndDeduplicates(t *testing.T) {
 	lines := bytes.Split(bytes.TrimSpace(out.Bytes()), []byte("\n"))
 	if len(lines) != 2 || bytes.Count(out.Bytes(), []byte(`"id":"a"`)) != 1 || bytes.Count(out.Bytes(), []byte(`"id":"b"`)) != 1 {
 		t.Fatalf("unexpected stream: %s", out.String())
+	}
+}
+
+func TestRecentIDsEvictsOldEntries(t *testing.T) {
+	seen := newRecentIDs(2)
+	if !seen.Add("a") || !seen.Add("b") || seen.Add("a") {
+		t.Fatal("recent ID set did not detect a duplicate")
+	}
+	if !seen.Add("c") {
+		t.Fatal("recent ID set rejected a new ID")
+	}
+	if len(seen.values) != 2 {
+		t.Fatalf("stored IDs = %d, want 2", len(seen.values))
+	}
+	if !seen.Add("a") {
+		t.Fatal("oldest ID was not evicted")
+	}
+}
+
+func TestLiveChatPollingIntervalIsBounded(t *testing.T) {
+	if got := liveChatPollingInterval(0); got != time.Second {
+		t.Fatalf("zero interval = %v", got)
+	}
+	if got := liveChatPollingInterval(2500); got != 2500*time.Millisecond {
+		t.Fatalf("normal interval = %v", got)
+	}
+	if got := liveChatPollingInterval(999999999); got != maxLiveChatPollingInterval {
+		t.Fatalf("large interval = %v, want %v", got, maxLiveChatPollingInterval)
 	}
 }
 

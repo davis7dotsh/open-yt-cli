@@ -23,6 +23,10 @@ Platforms: `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`, `window
 - `site/install.sh` / `site/install.ps1` — download + verify + install
 - `internal/update/update.go` (`AssetName`) — the self-updater
 
+The checksum manifest and archives share the GitHub Release trust root. Checksums detect
+corruption and in-transit tampering, but they do not protect against a compromised publisher.
+Independent artifact signing is not currently configured.
+
 Version metadata is injected via
 `-ldflags -X open-yt-cli/internal/version.{Version,Commit,Date}=…` and surfaced by
 `oytc version`.
@@ -111,8 +115,7 @@ Then verify:
    `depot ci run list`) and
    <https://github.com/davis7dotsh/open-yt-cli/releases> shows six archives plus
    `checksums.txt`.
-2. `curl -fsSL https://davis7dotsh.github.io/open-yt-cli/install.sh | sh` installs and
-   `oytc version` prints `v0.1.0`.
+2. Download and run `install.sh`; `oytc version` prints `v0.1.0`.
 3. `oytc update --check` reports up-to-date.
 
 Subsequent releases: bump the tag (`v0.1.1`, `v0.2.0`, …) and push it. Prereleases: use a

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -195,6 +196,88 @@ func TestLoadFallsBackToEnvironmentKeyWhenFileCorrupt(t *testing.T) {
 	t.Setenv("OYTC_API_KEY", "")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected parse error without environment key")
+	}
+}
+
+func TestLoadRejectsOversizedCredentialFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OYTC_CONFIG_DIR", dir)
+	t.Setenv("OYTC_API_KEY", "")
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), bytes.Repeat([]byte("x"), maxCredentialBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "file exceeds") {
+		t.Fatalf("Load error = %v", err)
+	}
+}
+
+func TestLoadSecuresCredentialFileAndRejectsSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission and symlink checks")
+	}
+	dir := t.TempDir()
+	t.Setenv("OYTC_CONFIG_DIR", dir)
+	t.Setenv("OYTC_API_KEY", "")
+	path := filepath.Join(dir, "auth.json")
+	if err := os.WriteFile(path, []byte(`{"api_key":"secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := Load()
+	if err != nil {
+		t.Fatalf("Load with repairable permissions: %v", err)
+	}
+	if credentials.Key != "secret" {
+		t.Fatalf("loaded API key = %q", credentials.Key)
+	}
+	if mode := mustStat(t, path).Mode().Perm(); mode != 0o600 {
+		t.Fatalf("repaired credential mode = %04o, want 0600", mode)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "credentials.json")
+	if err := os.WriteFile(target, []byte(`{"api_key":"secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("Load through symbolic link = %v", err)
+	}
+}
+
+func TestOpenedCredentialFileUnaffectedByPathReplacement(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("replacement semantics differ while a file handle is open")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "auth.json")
+	replacement := filepath.Join(dir, "replacement.json")
+	if err := os.WriteFile(path, []byte(`{"api_key":"original"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(replacement, []byte(`{"api_key":"replacement"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	handle, err := openCredentialFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		_ = handle.Close()
+		t.Fatal(err)
+	}
+	file, err := readCredentialFile(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.APIKey != "original" {
+		t.Fatalf("loaded API key = %q, want original descriptor contents", file.APIKey)
 	}
 }
 

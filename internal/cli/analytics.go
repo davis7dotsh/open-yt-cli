@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"open-yt-cli/internal/config"
 	"open-yt-cli/internal/youtube"
 )
+
+var analyticsVideoIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 type analyticsFlags struct {
 	start   string
@@ -90,6 +93,9 @@ func (a *App) analyticsVideoCommand() *cobra.Command {
 		Short: "Show core analytics metrics for one owned video",
 		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !analyticsVideoIDPattern.MatchString(args[0]) {
+				return &UsageError{Message: "VIDEO_ID may contain only letters, digits, underscores, and hyphens"}
+			}
 			query := analytics.Query{Metrics: metrics, Filters: "video==" + args[0]}
 			return a.runAnalytics(cmd, flags, query, metrics)
 		},

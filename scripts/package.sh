@@ -23,13 +23,12 @@ if [ -z "$VERSION" ]; then
     echo "usage: scripts/package.sh <version-tag> [output-dir]" >&2
     exit 2
 fi
-case "$VERSION" in
-    v[0-9]*) ;;
-    *)
-        echo "error: version must look like v0.1.0 (got '$VERSION')" >&2
-        exit 2
-        ;;
-esac
+version_newlines="$(printf '%s' "$VERSION" | wc -l | tr -d '[:space:]')"
+if [ "$version_newlines" != "0" ] ||
+    ! printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+    echo "error: version must be a v-prefixed semantic version (got '$VERSION')" >&2
+    exit 2
+fi
 
 COMMIT="${OYTC_COMMIT:-$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}"
 DATE="${OYTC_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"

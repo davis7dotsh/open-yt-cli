@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -283,6 +284,115 @@ func TestUpdateMissingAssetForPlatform(t *testing.T) {
 	_, err := f.updater.Run(context.Background(), Options{})
 	if err == nil || !strings.Contains(err.Error(), "no asset") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestValidateAssetURLsRejectsInsecureOrInvalidURLs(t *testing.T) {
+	validArchive := "https://github.com/owner/repo/releases/download/v1.2.3/oytc_v1.2.3_linux_amd64.tar.gz"
+	validChecksums := "https://github.com/owner/repo/releases/download/v1.2.3/checksums.txt"
+	if err := validateAssetURLs("https://api.github.com", "owner/repo", "v1.2.3", validArchive, "oytc_v1.2.3_linux_amd64.tar.gz", validChecksums, ChecksumsName); err != nil {
+		t.Fatal(err)
+	}
+	for _, asset := range []string{
+		"http://github.com/owner/repo/releases/download/v1.2.3/oytc_v1.2.3_linux_amd64.tar.gz",
+		"https://github.com/attacker/repo/releases/download/v1.2.3/oytc_v1.2.3_linux_amd64.tar.gz",
+		"https://example.com/owner/repo/releases/download/v1.2.3/oytc_v1.2.3_linux_amd64.tar.gz",
+		"file:///tmp/archive",
+		"/relative/archive",
+	} {
+		if err := validateAssetURLs("https://api.github.com", "owner/repo", "v1.2.3", asset, "oytc_v1.2.3_linux_amd64.tar.gz", validChecksums, ChecksumsName); err == nil {
+			t.Fatalf("validateAssetURLs accepted %q", asset)
+		}
+	}
+	if err := validateAssetURLs("http://127.0.0.1:8080", "owner/repo", "v1.2.3", "http://127.0.0.1:8080/archive", "archive", "http://127.0.0.1:8080/checksums", ChecksumsName); err != nil {
+		t.Fatalf("local HTTP fixture was rejected: %v", err)
+	}
+}
+
+func TestResolveReleaseRejectsUnsafeOrMismatchedTags(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_ = json.NewEncoder(w).Encode(Release{TagName: "v9.9.9"})
+	}))
+	defer server.Close()
+	updater := Updater{Repo: "owner/repo", APIBaseURL: server.URL, HTTPClient: server.Client()}
+
+	for _, tag := range []string{
+		"v../../../../../../attacker/repo/releases/tags/v9.9.9",
+		"v1.2.3/../../attacker",
+		"v1.2",
+		"v01.2.3",
+		"v1.2.3-01",
+	} {
+		if _, err := updater.resolveRelease(context.Background(), tag); err == nil || !strings.Contains(err.Error(), "invalid release version") {
+			t.Fatalf("resolveRelease(%q) error = %v", tag, err)
+		}
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("unsafe tags made %d HTTP request(s)", requests.Load())
+	}
+
+	if _, err := updater.resolveRelease(context.Background(), "v1.2.3"); err == nil || !strings.Contains(err.Error(), "does not match requested tag") {
+		t.Fatalf("mismatched release error = %v", err)
+	}
+}
+
+func TestResolveReleaseRejectsUnsafeRepository(t *testing.T) {
+	updater := Updater{Repo: "owner/repo/../../attacker/repo"}
+	if _, err := updater.resolveRelease(context.Background(), "v1.2.3"); err == nil || !strings.Contains(err.Error(), "invalid GitHub repository") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestUpdaterRefusesHTTPSRedirectDowngrade(t *testing.T) {
+	var targetRequests atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		targetRequests.Add(1)
+	}))
+	defer target.Close()
+	source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer source.Close()
+
+	updater := Updater{HTTPClient: source.Client()}
+	if _, err := updater.get(context.Background(), source.URL, 1024, ""); err == nil || !strings.Contains(err.Error(), "insecure URL") {
+		t.Fatalf("error = %v", err)
+	}
+	if targetRequests.Load() != 0 {
+		t.Fatalf("insecure redirect target received %d request(s)", targetRequests.Load())
+	}
+}
+
+func TestUpdaterRefusesNonGitHubRedirectForDefaultAPI(t *testing.T) {
+	var targetRequests atomic.Int32
+	target := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		targetRequests.Add(1)
+	}))
+	defer target.Close()
+	source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer source.Close()
+
+	updater := Updater{HTTPClient: source.Client()}
+	if _, err := updater.get(context.Background(), source.URL, 1024, ""); err == nil || !strings.Contains(err.Error(), "unexpected host") {
+		t.Fatalf("error = %v", err)
+	}
+	if targetRequests.Load() != 0 {
+		t.Fatalf("unexpected redirect target received %d request(s)", targetRequests.Load())
+	}
+}
+
+func TestCopyWithLimitRejectsOversizedContent(t *testing.T) {
+	var output bytes.Buffer
+	written, err := copyWithLimit(&output, strings.NewReader("12345"), 4)
+	if err == nil || !strings.Contains(err.Error(), "exceeds 4 bytes") {
+		t.Fatalf("copyWithLimit error = %v", err)
+	}
+	if written != 5 {
+		t.Fatalf("written = %d, want 5", written)
 	}
 }
 

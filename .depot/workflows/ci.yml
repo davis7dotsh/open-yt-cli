@@ -38,6 +38,15 @@ jobs:
           git diff --exit-code go.mod go.sum
       - name: go vet
         run: go vet ./...
+      - name: Vulnerability scan (all release targets)
+        run: |
+          set -eu
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          scanner="$(go env GOPATH)/bin/govulncheck"
+          for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            echo "== $platform =="
+            GOTOOLCHAIN=local GOOS="${platform%/*}" GOARCH="${platform#*/}" "$scanner" ./...
+          done
       - name: Tests (race detector)
         run: go test -race ./...
       - name: Build
@@ -76,6 +85,27 @@ jobs:
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q shellcheck
           shellcheck site/install.sh scripts/package.sh
+      - name: Reject unsafe release versions
+        run: |
+          set -eu
+          marker="/tmp/oytc-tag-injection"
+          rm -f "$marker"
+          if ./scripts/package.sh 'v1.2.3"; touch /tmp/oytc-tag-injection; echo "' dist-invalid; then
+            echo "unsafe release version was accepted" >&2
+            exit 1
+          fi
+          newline_version="$(printf 'v1.2.3\n../../escape')"
+          if ./scripts/package.sh "$newline_version" dist-invalid; then
+            echo "multiline release version was accepted" >&2
+            exit 1
+          fi
+          for invalid_version in v01.2.3 v1.2.3-01; do
+            if ./scripts/package.sh "$invalid_version" dist-invalid; then
+              echo "non-canonical release version was accepted: $invalid_version" >&2
+              exit 1
+            fi
+          done
+          test ! -e "$marker"
       - name: Skill structure
         run: |
           python3 - <<'EOF'
@@ -118,3 +148,33 @@ jobs:
             OYTC_DOWNLOAD_BASE=http://127.0.0.1:8931 sh site/install.sh
           "$PWD/fake-home/.local/bin/oytc" version
           "$PWD/fake-home/.local/bin/oytc_update" --help >/dev/null
+          mkdir curl-shim
+          cat >curl-shim/curl <<'EOF'
+          #!/bin/sh
+          : >"${CURL_MARKER:?}"
+          exit 99
+          EOF
+          chmod +x curl-shim/curl
+          request_marker="$PWD/unexpected-curl-request"
+          rm -f "$request_marker"
+          if PATH="$PWD/curl-shim:$PATH" CURL_MARKER="$request_marker" \
+            HOME="$PWD/fake-home" OYTC_VERSION=v0.0.0-ci \
+            OYTC_DOWNLOAD_BASE='http://localhost' sh site/install.sh; then
+            echo "recording curl shim unexpectedly succeeded" >&2
+            exit 1
+          fi
+          test -e "$request_marker" || {
+            echo "installer rejected a loopback HTTP authority without a port" >&2
+            exit 1
+          }
+          rm -f "$request_marker"
+          if PATH="$PWD/curl-shim:$PATH" CURL_MARKER="$request_marker" \
+            HOME="$PWD/fake-home" OYTC_VERSION=v0.0.0-ci \
+            OYTC_DOWNLOAD_BASE='http://localhost:80@attacker.invalid' sh site/install.sh; then
+            echo "installer accepted a non-loopback HTTP authority" >&2
+            exit 1
+          fi
+          test ! -e "$request_marker" || {
+            echo "installer attempted an HTTP request for a hostile authority" >&2
+            exit 1
+          }

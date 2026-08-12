@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,7 +18,10 @@ const (
 	envKey               = "OYTC_API_KEY"
 	envOAuthClientID     = "OYTC_OAUTH_CLIENT_ID"
 	envOAuthClientSecret = "OYTC_OAUTH_CLIENT_SECRET"
+	maxCredentialBytes   = 1 << 20
 )
+
+var errCredentialSymlink = errors.New("credential file is a symbolic link or reparse point")
 
 type File struct {
 	APIKey string            `json:"api_key,omitempty"`
@@ -251,18 +255,64 @@ func acquireUpdateLock(path string) (func(), error) {
 }
 
 func loadFile(path string) (File, bool, error) {
-	data, err := os.ReadFile(path)
+	handle, err := openCredentialFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return File{}, false, nil
 	}
 	if err != nil {
-		return File{}, false, fmt.Errorf("read credentials: %w", err)
+		if errors.Is(err, errCredentialSymlink) {
+			return File{}, true, errors.New("read credentials: auth.json must not be a symbolic link")
+		}
+		return File{}, true, fmt.Errorf("open credentials: %w", err)
+	}
+	file, err := readCredentialFile(handle)
+	return file, true, err
+}
+
+func readCredentialFile(handle *os.File) (File, error) {
+	info, statErr := handle.Stat()
+	if statErr != nil {
+		closeErr := handle.Close()
+		return File{}, fmt.Errorf("inspect credentials: %w", errors.Join(statErr, closeErr))
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		validationErr := errors.New("read credentials: auth.json must not be a symbolic link")
+		return File{}, errors.Join(validationErr, handle.Close())
+	}
+	if !info.Mode().IsRegular() {
+		validationErr := errors.New("read credentials: auth.json must be a regular file")
+		return File{}, errors.Join(validationErr, handle.Close())
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		originalMode := info.Mode().Perm()
+		chmodErr := handle.Chmod(0o600)
+		info, statErr = handle.Stat()
+		if chmodErr != nil || statErr != nil || info.Mode().Perm()&0o077 != 0 {
+			secureErr := errors.Join(chmodErr, statErr)
+			if secureErr == nil {
+				secureErr = errors.New("filesystem did not apply mode 0600")
+			}
+			secureErr = errors.Join(secureErr, handle.Close())
+			return File{}, fmt.Errorf(
+				"read credentials: insecure permissions %04o on auth.json; chmod 600 failed: %w",
+				originalMode,
+				secureErr,
+			)
+		}
+	}
+	data, readErr := io.ReadAll(io.LimitReader(handle, maxCredentialBytes+1))
+	closeErr := handle.Close()
+	if readErr != nil || closeErr != nil {
+		return File{}, fmt.Errorf("read credentials: %w", errors.Join(readErr, closeErr))
+	}
+	if len(data) > maxCredentialBytes {
+		return File{}, fmt.Errorf("read credentials: file exceeds %d bytes", maxCredentialBytes)
 	}
 	var file File
 	if err := json.Unmarshal(data, &file); err != nil {
-		return File{}, true, fmt.Errorf("parse credentials: %w", err)
+		return File{}, fmt.Errorf("parse credentials: %w", err)
 	}
-	return file, true, nil
+	return file, nil
 }
 
 func saveFile(path string, file File) (string, error) {

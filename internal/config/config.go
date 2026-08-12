@@ -284,8 +284,21 @@ func readCredentialFile(handle *os.File) (File, error) {
 		return File{}, errors.New("read credentials: auth.json must be a regular file")
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		handle.Close()
-		return File{}, fmt.Errorf("read credentials: insecure permissions %04o on auth.json; run chmod 600", info.Mode().Perm())
+		originalMode := info.Mode().Perm()
+		chmodErr := handle.Chmod(0o600)
+		info, statErr = handle.Stat()
+		if chmodErr != nil || statErr != nil || info.Mode().Perm()&0o077 != 0 {
+			secureErr := errors.Join(chmodErr, statErr)
+			if secureErr == nil {
+				secureErr = errors.New("filesystem did not apply mode 0600")
+			}
+			handle.Close()
+			return File{}, fmt.Errorf(
+				"read credentials: insecure permissions %04o on auth.json; chmod 600 failed: %w",
+				originalMode,
+				secureErr,
+			)
+		}
 	}
 	data, readErr := io.ReadAll(io.LimitReader(handle, maxCredentialBytes+1))
 	closeErr := handle.Close()

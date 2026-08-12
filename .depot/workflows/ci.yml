@@ -148,8 +148,22 @@ jobs:
             OYTC_DOWNLOAD_BASE=http://127.0.0.1:8931 sh site/install.sh
           "$PWD/fake-home/.local/bin/oytc" version
           "$PWD/fake-home/.local/bin/oytc_update" --help >/dev/null
-          if HOME="$PWD/fake-home" OYTC_VERSION=v0.0.0-ci \
+          mkdir curl-shim
+          cat >curl-shim/curl <<'EOF'
+          #!/bin/sh
+          : >"${CURL_MARKER:?}"
+          exit 99
+          EOF
+          chmod +x curl-shim/curl
+          request_marker="$PWD/unexpected-curl-request"
+          rm -f "$request_marker"
+          if PATH="$PWD/curl-shim:$PATH" CURL_MARKER="$request_marker" \
+            HOME="$PWD/fake-home" OYTC_VERSION=v0.0.0-ci \
             OYTC_DOWNLOAD_BASE='http://localhost:80@attacker.invalid' sh site/install.sh; then
             echo "installer accepted a non-loopback HTTP authority" >&2
             exit 1
           fi
+          test ! -e "$request_marker" || {
+            echo "installer attempted an HTTP request for a hostile authority" >&2
+            exit 1
+          }

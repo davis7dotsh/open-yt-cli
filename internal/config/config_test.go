@@ -211,7 +211,7 @@ func TestLoadRejectsOversizedCredentialFile(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsInsecureCredentialFile(t *testing.T) {
+func TestLoadSecuresCredentialFileAndRejectsSymlink(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permission and symlink checks")
 	}
@@ -225,8 +225,15 @@ func TestLoadRejectsInsecureCredentialFile(t *testing.T) {
 	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "insecure permissions") {
-		t.Fatalf("Load with permissive mode = %v", err)
+	credentials, err := Load()
+	if err != nil {
+		t.Fatalf("Load with repairable permissions: %v", err)
+	}
+	if credentials.Key != "secret" {
+		t.Fatalf("loaded API key = %q", credentials.Key)
+	}
+	if mode := mustStat(t, path).Mode().Perm(); mode != 0o600 {
+		t.Fatalf("repaired credential mode = %04o, want 0600", mode)
 	}
 
 	if err := os.Remove(path); err != nil {

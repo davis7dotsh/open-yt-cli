@@ -47,8 +47,16 @@ is_loopback_http() {
     esac
     authority="${1#http://}"
     authority="${authority%%/*}"
-    host="${authority%:*}"
-    port="${authority##*:}"
+    case "$authority" in
+        *:*)
+            host="${authority%:*}"
+            port="${authority##*:}"
+            ;;
+        *)
+            host="$authority"
+            port="80"
+            ;;
+    esac
     case "$host" in
         127.0.0.1 | localhost) ;;
         *) return 1 ;;

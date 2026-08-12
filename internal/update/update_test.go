@@ -322,6 +322,8 @@ func TestResolveReleaseRejectsUnsafeOrMismatchedTags(t *testing.T) {
 		"v../../../../../../attacker/repo/releases/tags/v9.9.9",
 		"v1.2.3/../../attacker",
 		"v1.2",
+		"v01.2.3",
+		"v1.2.3-01",
 	} {
 		if _, err := updater.resolveRelease(context.Background(), tag); err == nil || !strings.Contains(err.Error(), "invalid release version") {
 			t.Fatalf("resolveRelease(%q) error = %v", tag, err)

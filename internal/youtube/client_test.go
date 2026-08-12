@@ -191,6 +191,9 @@ func TestBackoffCapsRetryAfter(t *testing.T) {
 	if got := backoff(0, "5"); got != 5*time.Second {
 		t.Fatalf("backoff = %v, want 5s", got)
 	}
+	if got := backoff(40, ""); got != maxRetryDelay {
+		t.Fatalf("large-attempt backoff = %v, want %v", got, maxRetryDelay)
+	}
 }
 
 func TestListPaginationLimitAndToken(t *testing.T) {

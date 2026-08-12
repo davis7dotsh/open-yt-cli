@@ -262,6 +262,12 @@ func backoff(attempt int, retryAfter string) time.Duration {
 		}
 		return time.Duration(seconds) * time.Second
 	}
+	if attempt < 0 {
+		attempt = 0
+	}
+	if attempt >= 8 {
+		return maxRetryDelay
+	}
 	base := time.Duration(1<<attempt) * 250 * time.Millisecond
 	return min(base+time.Duration(rand.IntN(150))*time.Millisecond, maxRetryDelay)
 }

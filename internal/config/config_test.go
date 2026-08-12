@@ -244,6 +244,36 @@ func TestLoadRejectsInsecureCredentialFile(t *testing.T) {
 	}
 }
 
+func TestOpenedCredentialFileUnaffectedByPathReplacement(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("replacement semantics differ while a file handle is open")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "auth.json")
+	replacement := filepath.Join(dir, "replacement.json")
+	if err := os.WriteFile(path, []byte(`{"api_key":"original"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(replacement, []byte(`{"api_key":"replacement"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	handle, err := openCredentialFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		handle.Close()
+		t.Fatal(err)
+	}
+	file, err := readCredentialFile(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.APIKey != "original" {
+		t.Fatalf("loaded API key = %q, want original descriptor contents", file.APIKey)
+	}
+}
+
 func TestEnvironmentKeyHasPrecedence(t *testing.T) {
 	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
 	t.Setenv("OYTC_API_KEY", "environment-secret")

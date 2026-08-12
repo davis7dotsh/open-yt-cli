@@ -1,7 +1,8 @@
 # oytc installer for Windows — https://github.com/davis7dotsh/open-yt-cli
 #
-#   irm https://davis7dotsh.github.io/open-yt-cli/install.ps1 -OutFile install.ps1
-#   & .\install.ps1
+#   $tmp = Join-Path ([IO.Path]::GetTempPath()) ("oytc-install-" + [Guid]::NewGuid() + ".ps1")
+#   try { irm https://davis7dotsh.github.io/open-yt-cli/install.ps1 -OutFile $tmp -ErrorAction Stop; & $tmp }
+#   finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
 #
 # Optional environment variables:
 #   OYTC_VERSION      release tag to install, e.g. v0.2.0 (default: latest)
@@ -31,7 +32,7 @@ if (-not $version) {
 } elseif ($version -notmatch '^v') {
     $version = "v$version"
 }
-if ($version -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?\z') {
+if ($version -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?\z') {
     throw "Release version must be a v-prefixed semantic version (got '$version')."
 }
 

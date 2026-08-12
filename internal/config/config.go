@@ -21,6 +21,8 @@ const (
 	maxCredentialBytes   = 1 << 20
 )
 
+var errCredentialSymlink = errors.New("credential file is a symbolic link or reparse point")
+
 type File struct {
 	APIKey string            `json:"api_key,omitempty"`
 	OAuth  *OAuthCredentials `json:"oauth,omitempty"`
@@ -253,39 +255,51 @@ func acquireUpdateLock(path string) (func(), error) {
 }
 
 func loadFile(path string) (File, bool, error) {
-	info, err := os.Lstat(path)
+	handle, err := openCredentialFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return File{}, false, nil
 	}
 	if err != nil {
-		return File{}, false, fmt.Errorf("inspect credentials: %w", err)
+		if errors.Is(err, errCredentialSymlink) {
+			return File{}, true, errors.New("read credentials: auth.json must not be a symbolic link")
+		}
+		return File{}, true, fmt.Errorf("open credentials: %w", err)
+	}
+	file, err := readCredentialFile(handle)
+	return file, true, err
+}
+
+func readCredentialFile(handle *os.File) (File, error) {
+	info, statErr := handle.Stat()
+	if statErr != nil {
+		closeErr := handle.Close()
+		return File{}, fmt.Errorf("inspect credentials: %w", errors.Join(statErr, closeErr))
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return File{}, true, errors.New("read credentials: auth.json must not be a symbolic link")
+		handle.Close()
+		return File{}, errors.New("read credentials: auth.json must not be a symbolic link")
 	}
 	if !info.Mode().IsRegular() {
-		return File{}, true, errors.New("read credentials: auth.json must be a regular file")
+		handle.Close()
+		return File{}, errors.New("read credentials: auth.json must be a regular file")
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		return File{}, true, fmt.Errorf("read credentials: insecure permissions %04o on auth.json; run chmod 600", info.Mode().Perm())
-	}
-	handle, err := os.Open(path)
-	if err != nil {
-		return File{}, true, fmt.Errorf("read credentials: %w", err)
+		handle.Close()
+		return File{}, fmt.Errorf("read credentials: insecure permissions %04o on auth.json; run chmod 600", info.Mode().Perm())
 	}
 	data, readErr := io.ReadAll(io.LimitReader(handle, maxCredentialBytes+1))
 	closeErr := handle.Close()
 	if readErr != nil || closeErr != nil {
-		return File{}, true, fmt.Errorf("read credentials: %w", errors.Join(readErr, closeErr))
+		return File{}, fmt.Errorf("read credentials: %w", errors.Join(readErr, closeErr))
 	}
 	if len(data) > maxCredentialBytes {
-		return File{}, true, fmt.Errorf("read credentials: file exceeds %d bytes", maxCredentialBytes)
+		return File{}, fmt.Errorf("read credentials: file exceeds %d bytes", maxCredentialBytes)
 	}
 	var file File
 	if err := json.Unmarshal(data, &file); err != nil {
-		return File{}, true, fmt.Errorf("parse credentials: %w", err)
+		return File{}, fmt.Errorf("parse credentials: %w", err)
 	}
-	return file, true, nil
+	return file, nil
 }
 
 func saveFile(path string, file File) (string, error) {

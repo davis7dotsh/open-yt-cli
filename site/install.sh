@@ -1,8 +1,10 @@
 #!/bin/sh
 # oytc installer — https://github.com/davis7dotsh/open-yt-cli
 #
-#   curl -fsSLO https://davis7dotsh.github.io/open-yt-cli/install.sh
-#   sh install.sh
+#   tmp="$(mktemp)" && {
+#     curl --proto '=https' --proto-redir '=https' -fsSL https://davis7dotsh.github.io/open-yt-cli/install.sh -o "$tmp" && sh "$tmp"
+#     status=$?; rm -f "$tmp"; (exit "$status")
+#   }
 #
 # Options (environment variables):
 #   OYTC_VERSION      release tag to install, e.g. v0.2.0 (default: latest)
@@ -112,7 +114,7 @@ else
 fi
 version_newlines="$(printf '%s' "$version" | wc -l | tr -d '[:space:]')"
 if [ "$version_newlines" != "0" ] ||
-    ! printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$'; then
+    ! printf '%s\n' "$version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
     fail "release version must be a v-prefixed semantic version (got '$version')"
 fi
 

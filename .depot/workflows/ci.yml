@@ -99,6 +99,12 @@ jobs:
             echo "multiline release version was accepted" >&2
             exit 1
           fi
+          for invalid_version in v01.2.3 v1.2.3-01; do
+            if ./scripts/package.sh "$invalid_version" dist-invalid; then
+              echo "non-canonical release version was accepted: $invalid_version" >&2
+              exit 1
+            fi
+          done
           test ! -e "$marker"
       - name: Skill structure
         run: |

@@ -31,7 +31,7 @@ if (-not $version) {
 } elseif ($version -notmatch '^v') {
     $version = "v$version"
 }
-if ($version -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$') {
+if ($version -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?\z') {
     throw "Release version must be a v-prefixed semantic version (got '$version')."
 }
 

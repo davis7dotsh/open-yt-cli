@@ -38,11 +38,32 @@ fail() {
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v tar >/dev/null 2>&1 || fail "tar is required"
 
+is_loopback_http() {
+    case "$1" in
+        http://*/*) ;;
+        *) return 1 ;;
+    esac
+    authority="${1#http://}"
+    authority="${authority%%/*}"
+    host="${authority%:*}"
+    port="${authority##*:}"
+    case "$host" in
+        127.0.0.1 | localhost) ;;
+        *) return 1 ;;
+    esac
+    case "$port" in
+        "" | *[!0-9]*) return 1 ;;
+    esac
+    [ "${#port}" -le 5 ] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
+}
+
 fetch() {
     case "$1" in
         https://*) curl --proto '=https' --proto-redir '=https' -fsSL "$1" ;;
-        http://127.0.0.1:* | http://localhost:*) curl -fsSL "$1" ;;
-        *) fail "refusing to download from insecure URL: $1" ;;
+        *)
+            is_loopback_http "$1" || fail "refusing to download from insecure URL: $1"
+            curl -fsSL "$1"
+            ;;
     esac
 }
 
@@ -51,8 +72,10 @@ fetch_to() {
     url="$2"
     case "$url" in
         https://*) curl --proto '=https' --proto-redir '=https' -fsSL -o "$output" "$url" ;;
-        http://127.0.0.1:* | http://localhost:*) curl -fsSL -o "$output" "$url" ;;
-        *) fail "refusing to download from insecure URL: $url" ;;
+        *)
+            is_loopback_http "$url" || fail "refusing to download from insecure URL: $url"
+            curl -fsSL -o "$output" "$url"
+            ;;
     esac
 }
 
@@ -87,7 +110,9 @@ else
         *) version="v${version}" ;;
     esac
 fi
-if ! printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$'; then
+version_newlines="$(printf '%s' "$version" | wc -l | tr -d '[:space:]')"
+if [ "$version_newlines" != "0" ] ||
+    ! printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$'; then
     fail "release version must be a v-prefixed semantic version (got '$version')"
 fi
 

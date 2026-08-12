@@ -45,12 +45,13 @@ func TestTSVNeutralizesSpreadsheetFormulasInStrings(t *testing.T) {
 	result := youtube.ListResult{Items: []map[string]any{{
 		"title": "=HYPERLINK(\"https://example.invalid\")",
 		"count": json.Number("-5"),
+		"list":  []any{"=cmd"},
 	}}}
 	var buffer bytes.Buffer
-	if err := Render(&buffer, result, Options{Format: "tsv", Columns: []string{"title", "count"}, NoHeader: true}); err != nil {
+	if err := Render(&buffer, result, Options{Format: "tsv", Columns: []string{"title", "count", "list"}, NoHeader: true}); err != nil {
 		t.Fatal(err)
 	}
-	want := "'=HYPERLINK(\"https://example.invalid\")\t-5\n"
+	want := "'=HYPERLINK(\"https://example.invalid\")\t-5\t'=cmd\n"
 	if buffer.String() != want {
 		t.Fatalf("TSV = %q, want %q", buffer.String(), want)
 	}

@@ -43,7 +43,9 @@ jobs:
           else
             tag="${GITHUB_REF_NAME}"
           fi
-          if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$'; then
+          tag_newlines="$(printf '%s' "$tag" | wc -l | tr -d '[:space:]')"
+          if [ "$tag_newlines" != "0" ] ||
+            ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$'; then
             echo "error: '$tag' is not a valid v-prefixed semantic version tag" >&2
             exit 1
           fi
@@ -55,8 +57,15 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: Vulnerability scan
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+      - name: Vulnerability scan (all release targets)
+        run: |
+          set -eu
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          scanner="$(go env GOPATH)/bin/govulncheck"
+          for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            echo "== $platform =="
+            GOOS="${platform%/*}" GOARCH="${platform#*/}" "$scanner" ./...
+          done
       - name: Tests (race detector)
         run: go test -race ./...
       - name: Package all platforms

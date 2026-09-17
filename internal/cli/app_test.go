@@ -72,7 +72,7 @@ func TestOAuthLoginLoopbackSavesWithoutClobberingAPIKey(t *testing.T) {
 		}
 		// x/oauth2 parses token responses by Content-Type.
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"access_token":"access-secret","refresh_token":"refresh-secret","expires_in":3600,"token_type":"Bearer","scope":"https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly"}`))
+		_, _ = w.Write([]byte(`{"access_token":"access-secret","refresh_token":"refresh-secret","expires_in":3600,"token_type":"Bearer","scope":"https://www.googleapis.com/auth/yt-analytics.readonly"}`))
 	}))
 	defer server.Close()
 	app, out, _ := testApp(server)
@@ -80,6 +80,9 @@ func TestOAuthLoginLoopbackSavesWithoutClobberingAPIKey(t *testing.T) {
 		parsed, err := url.Parse(target)
 		if err != nil {
 			return err
+		}
+		if scope := parsed.Query().Get("scope"); scope != analyticsReadonlyScope {
+			t.Errorf("requested scope = %q", scope)
 		}
 		callback := parsed.Query().Get("redirect_uri") + "?code=login-code&state=" + url.QueryEscape(parsed.Query().Get("state"))
 		go func() {
@@ -110,6 +113,102 @@ func TestOAuthLoginLoopbackSavesWithoutClobberingAPIKey(t *testing.T) {
 	}
 }
 
+func TestOAuthLoginKeepsDataAccessForEnvironmentOnlyKey(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "temporary-key")
+	t.Setenv("OYTC_OAUTH_CLIENT_ID", "desktop-id")
+	t.Setenv("OYTC_OAUTH_CLIENT_SECRET", "desktop-secret")
+	var dataRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"oauth-access","refresh_token":"oauth-refresh","expires_in":3600,"token_type":"Bearer","scope":"https://www.googleapis.com/auth/yt-analytics.readonly https://www.googleapis.com/auth/youtube.readonly"}`))
+		case "/youtube/v3/videos":
+			dataRequests.Add(1)
+			if r.Header.Get("Authorization") != "Bearer oauth-access" || r.Header.Get("X-Goog-Api-Key") != "" {
+				t.Errorf("Data API credentials = %v", r.Header)
+			}
+			_, _ = w.Write([]byte(`{"items":[{"id":"video-id"}]}`))
+		default:
+			t.Errorf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	app, _, _ := testApp(server)
+	app.OpenBrowser = func(target string) error {
+		parsed, err := url.Parse(target)
+		if err != nil {
+			return err
+		}
+		if scope := parsed.Query().Get("scope"); scope != analyticsReadonlyScope+" "+youtubeReadonlyScope {
+			t.Errorf("requested scope = %q", scope)
+		}
+		callback := parsed.Query().Get("redirect_uri") + "?code=login-code&state=" + url.QueryEscape(parsed.Query().Get("state"))
+		go func() {
+			if response, err := http.Get(callback); err == nil {
+				response.Body.Close()
+			}
+		}()
+		return nil
+	}
+	if err := execute(t, app, "login", "--oauth"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OYTC_API_KEY", "")
+	if err := execute(t, app, "video", "get", "video-id", "--format", "json"); err != nil {
+		t.Fatal(err)
+	}
+	if dataRequests.Load() != 1 {
+		t.Fatalf("Data API requests = %d", dataRequests.Load())
+	}
+}
+
+func TestOAuthLoginRejectsAnalyticsOnlyGrantIfSavedKeyIsRemoved(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "")
+	t.Setenv("OYTC_OAUTH_CLIENT_ID", "desktop-id")
+	t.Setenv("OYTC_OAUTH_CLIENT_SECRET", "desktop-secret")
+	if _, err := config.Save("existing-key"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"access-secret","refresh_token":"refresh-secret","expires_in":3600,"token_type":"Bearer","scope":"https://www.googleapis.com/auth/yt-analytics.readonly"}`))
+	}))
+	defer server.Close()
+	app, _, _ := testApp(server)
+	app.OpenBrowser = func(target string) error {
+		parsed, err := url.Parse(target)
+		if err != nil {
+			return err
+		}
+		if scope := parsed.Query().Get("scope"); scope != analyticsReadonlyScope {
+			t.Errorf("requested scope = %q", scope)
+		}
+		if _, err := config.ClearAPIKey(); err != nil {
+			return err
+		}
+		callback := parsed.Query().Get("redirect_uri") + "?code=login-code&state=" + url.QueryEscape(parsed.Query().Get("state"))
+		go func() {
+			if response, err := http.Get(callback); err == nil {
+				response.Body.Close()
+			}
+		}()
+		return nil
+	}
+	if err := execute(t, app, "login", "--oauth"); err == nil || !strings.Contains(err.Error(), "saved API key was removed") {
+		t.Fatalf("login error = %v", err)
+	}
+	credentials, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credentials.Key != "" || credentials.OAuth != nil {
+		t.Fatalf("credentials after key removal = %#v", credentials)
+	}
+}
+
 func TestAnalyticsCommands(t *testing.T) {
 	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
 	t.Setenv("OYTC_API_KEY", "")
@@ -127,8 +226,8 @@ func TestAnalyticsCommands(t *testing.T) {
 		filters    string
 	}{
 		{"report", []string{"analytics", "report", "--metrics", "views,likes", "--dimensions", "day"}, "views,likes", "day", ""},
-		{"overview", []string{"analytics", "overview", "--by", "month"}, "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained", "month", ""},
-		{"video", []string{"analytics", "video", "video-id"}, "views,estimatedMinutesWatched,averageViewDuration,likes,comments,subscribersGained", "", "video==video-id"},
+		{"overview", []string{"analytics", "overview", "--by", "month"}, "views,engagedViews,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained", "month", ""},
+		{"video", []string{"analytics", "video", "video-id"}, "views,engagedViews,estimatedMinutesWatched,averageViewDuration,likes,comments,subscribersGained", "", "video==video-id"},
 		{"traffic", []string{"analytics", "traffic-sources"}, "views,estimatedMinutesWatched", "insightTrafficSourceType", ""},
 		{"demographics", []string{"analytics", "demographics"}, "viewerPercentage", "ageGroup,gender", ""},
 	}

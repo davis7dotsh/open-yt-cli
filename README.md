@@ -36,7 +36,7 @@ try {
 
 Alternatively, download a zip from [releases](https://github.com/davis7dotsh/open-yt-cli/releases).
 
-From source (Go 1.26.5+): `go install ./cmd/oytc` from a clone, or `make build`.
+From source (Go 1.26.6+): `go install ./cmd/oytc` from a clone, or `make build`.
 
 ## Quick start
 
@@ -92,11 +92,13 @@ precedence over the saved key.
 
 For analytics, follow [docs/oauth.md](docs/oauth.md), then run `oytc login --oauth`.
 `OYTC_OAUTH_CLIENT_ID` and `OYTC_OAUTH_CLIENT_SECRET` can bootstrap login non-interactively;
-otherwise `oytc` prompts for both (the secret without echo). OAuth requests two read-only
-scopes: `yt-analytics.readonly` (Analytics reports) and `youtube.readonly` (Data API reads,
-so public-data commands also work without an API key). Note that `youtube.readonly` is
-classified sensitive: accounts with Advanced Protection or restrictive Workspace policies
-hard-block unverified apps requesting it, so verify the consent app for those accounts.
+otherwise `oytc` prompts for both (the secret without echo). OAuth always requests
+`yt-analytics.readonly` for Analytics reports. Without an API key saved in `auth.json`,
+it also requests `youtube.readonly` so public-data commands work through OAuth. That
+scope is sensitive:
+accounts with Advanced Protection or restrictive Workspace policies hard-block unverified
+apps requesting it. Save an API key with `oytc login` or verify the consent app for those
+accounts.
 
 ## Security & config
 

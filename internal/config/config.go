@@ -23,6 +23,8 @@ const (
 
 var errCredentialSymlink = errors.New("credential file is a symbolic link or reparse point")
 
+var ErrSavedAPIKeyMissing = errors.New("saved API key is no longer present")
+
 type File struct {
 	APIKey string            `json:"api_key,omitempty"`
 	OAuth  *OAuthCredentials `json:"oauth,omitempty"`
@@ -38,10 +40,11 @@ type OAuthCredentials struct {
 }
 
 type Credentials struct {
-	Key    string
-	Source string
-	OAuth  *OAuthCredentials
-	Path   string
+	Key      string
+	Source   string
+	SavedKey bool // auth.json contains an API key, even if OYTC_API_KEY takes precedence.
+	OAuth    *OAuthCredentials
+	Path     string
 }
 
 func Dir() (string, error) {
@@ -104,6 +107,7 @@ func Load() (Credentials, error) {
 	credentials := Credentials{Path: path}
 	if exists {
 		credentials.Key = strings.TrimSpace(file.APIKey)
+		credentials.SavedKey = credentials.Key != ""
 		credentials.OAuth = cloneOAuth(file.OAuth)
 		if credentials.Key != "" {
 			credentials.Source = "auth.json"
@@ -132,10 +136,26 @@ func Save(key string) (string, error) {
 }
 
 func SaveOAuth(credentials OAuthCredentials) (string, error) {
+	return saveOAuth(credentials, false)
+}
+
+// SaveOAuthIfSavedKeyExists keeps an Analytics-only grant from being saved if
+// the API key was removed while browser authorization was in progress.
+func SaveOAuthIfSavedKeyExists(credentials OAuthCredentials) (string, error) {
+	return saveOAuth(credentials, true)
+}
+
+func saveOAuth(credentials OAuthCredentials, requireSavedKey bool) (string, error) {
 	if err := normalizeOAuth(&credentials); err != nil {
 		return "", err
 	}
-	return updateFile(func(file *File) { file.OAuth = cloneOAuth(&credentials) })
+	return updateFileChecked(func(file *File) error {
+		if requireSavedKey && strings.TrimSpace(file.APIKey) == "" {
+			return ErrSavedAPIKeyMissing
+		}
+		file.OAuth = cloneOAuth(&credentials)
+		return nil
+	})
 }
 
 // SaveRefreshedOAuth persists a token refresh only if the stored authorization
@@ -214,6 +234,13 @@ func EnvOAuthClientSecretSet() bool {
 }
 
 func updateFile(update func(*File)) (string, error) {
+	return updateFileChecked(func(file *File) error {
+		update(file)
+		return nil
+	})
+}
+
+func updateFileChecked(update func(*File) error) (string, error) {
 	path, err := Path()
 	if err != nil {
 		return "", err
@@ -231,7 +258,9 @@ func updateFile(update func(*File)) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	update(&file)
+	if err := update(&file); err != nil {
+		return "", err
+	}
 	return saveFile(path, file)
 }
 

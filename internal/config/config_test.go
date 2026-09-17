@@ -190,7 +190,7 @@ func TestLoadFallsBackToEnvironmentKeyWhenFileCorrupt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load with corrupt file and env key: %v", err)
 	}
-	if credentials.Key != "environment-secret" || credentials.Source != "OYTC_API_KEY" {
+	if credentials.Key != "environment-secret" || credentials.Source != "OYTC_API_KEY" || credentials.SavedKey {
 		t.Fatalf("credentials = %#v", credentials)
 	}
 	t.Setenv("OYTC_API_KEY", "")
@@ -291,7 +291,7 @@ func TestEnvironmentKeyHasPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if credentials.Key != "environment-secret" || credentials.Source != "OYTC_API_KEY" {
+	if credentials.Key != "environment-secret" || credentials.Source != "OYTC_API_KEY" || !credentials.SavedKey {
 		t.Fatalf("unexpected credentials: %#v", credentials)
 	}
 }

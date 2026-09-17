@@ -67,10 +67,10 @@ func (a *App) analyticsOverviewCommand() *cobra.Command {
 	var by string
 	// Note: thumbnail impressions and impression CTR are Studio-only; the
 	// Analytics API has no such metrics.
-	metrics := []string{"views", "estimatedMinutesWatched", "averageViewDuration", "averageViewPercentage", "subscribersGained"}
+	metrics := []string{"views", "engagedViews", "estimatedMinutesWatched", "averageViewDuration", "averageViewPercentage", "subscribersGained"}
 	cmd := &cobra.Command{
 		Use:   "overview",
-		Short: "Show channel views, watch time, retention, and subscribers gained",
+		Short: "Show channel views, engaged views, watch time, retention, and subscribers gained",
 		Args:  exactArgs(0),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := validateEnum("--by", by, "day", "month"); err != nil {
@@ -87,7 +87,7 @@ func (a *App) analyticsOverviewCommand() *cobra.Command {
 
 func (a *App) analyticsVideoCommand() *cobra.Command {
 	var flags analyticsFlags
-	metrics := []string{"views", "estimatedMinutesWatched", "averageViewDuration", "likes", "comments", "subscribersGained"}
+	metrics := []string{"views", "engagedViews", "estimatedMinutesWatched", "averageViewDuration", "likes", "comments", "subscribersGained"}
 	cmd := &cobra.Command{
 		Use:   "video <VIDEO_ID>",
 		Short: "Show core analytics metrics for one owned video",

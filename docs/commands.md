@@ -98,8 +98,10 @@ If `OYTC_API_KEY` is set, `login` still saves the file but notes that the enviro
 variable remains the active, higher-precedence credential.
 
 `oytc login --oauth` runs a PKCE-protected loopback-browser flow and requests the
-read-only `yt-analytics.readonly` and `youtube.readonly` scopes (the latter is sensitive;
-see [OAuth setup](oauth.md) for the unverified-app caveat). It prints the authorization URL as a
+read-only `yt-analytics.readonly` scope. Without an API key saved in `auth.json`, it also
+requests `youtube.readonly` for Data API reads (that scope is sensitive; see
+[OAuth setup](oauth.md)
+for the unverified-app caveat). It prints the authorization URL as a
 headless fallback, stores access/refresh tokens in the same protected file, and preserves
 an existing API key. Client credentials come from `OYTC_OAUTH_CLIENT_ID` and
 `OYTC_OAUTH_CLIENT_SECRET` when set; missing values are prompted (the secret without echo).
@@ -151,11 +153,12 @@ oytc analytics traffic-sources --sort=-views --format tsv
 oytc analytics demographics --format jsonl
 ```
 
-- `overview` requests views, estimated watch minutes, average view duration, average view
-  percentage, and subscribers gained. `--by day|month` is optional. (Thumbnail impressions
+- `overview` requests views, engaged views, estimated watch minutes, average view duration,
+  average view percentage, and subscribers gained. `--by day|month` is optional. (Thumbnail impressions
   and impression click-through rate are only available in YouTube Studio; the Analytics API
   exposes no such metrics.)
-- `video <VIDEO_ID>` applies `video==VIDEO_ID` and requests core engagement/watch metrics.
+- `video <VIDEO_ID>` applies `video==VIDEO_ID` and requests core engagement/watch metrics,
+  including engaged views.
 - `traffic-sources` groups views and estimated watch minutes by
   `insightTrafficSourceType`.
 - `demographics` groups `viewerPercentage` by `ageGroup,gender`.

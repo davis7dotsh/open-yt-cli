@@ -125,7 +125,16 @@ func (a *App) loginOAuth(cmd *cobra.Command) error {
 	if err != nil {
 		return fmt.Errorf("OAuth login failed: %w", err)
 	}
-	path, err := config.SaveOAuth(storedOAuth(clientID, clientSecret, token))
+	grant := storedOAuth(clientID, clientSecret, token)
+	var path string
+	if credentials.SavedKey {
+		path, err = config.SaveOAuthIfSavedKeyExists(grant)
+	} else {
+		path, err = config.SaveOAuth(grant)
+	}
+	if errors.Is(err, config.ErrSavedAPIKeyMissing) {
+		return fmt.Errorf("saved API key was removed during OAuth login; run login --oauth again to authorize Data API access: %w", err)
+	}
 	if err != nil {
 		return err
 	}

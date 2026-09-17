@@ -23,7 +23,7 @@ const (
 )
 
 // An OAuth-only setup needs youtube.readonly for Data API reads. When an API
-// key is available, login requests only the non-sensitive Analytics scope.
+// key is saved, login requests only the non-sensitive Analytics scope.
 var oauthScopes = []string{analyticsReadonlyScope, youtubeReadonlyScope}
 
 func (a *App) authenticationCommands() []*cobra.Command {
@@ -118,7 +118,7 @@ func (a *App) loginOAuth(cmd *cobra.Command) error {
 		return err
 	}
 	loginConfig := a.oauthConfig(clientID, clientSecret)
-	if credentials.Key != "" {
+	if credentials.SavedKey {
 		loginConfig.Scopes = []string{analyticsReadonlyScope}
 	}
 	token, err := oauth.Login(cmd.Context(), loginConfig)

@@ -38,10 +38,11 @@ type OAuthCredentials struct {
 }
 
 type Credentials struct {
-	Key    string
-	Source string
-	OAuth  *OAuthCredentials
-	Path   string
+	Key      string
+	Source   string
+	SavedKey bool // auth.json contains an API key, even if OYTC_API_KEY takes precedence.
+	OAuth    *OAuthCredentials
+	Path     string
 }
 
 func Dir() (string, error) {
@@ -104,6 +105,7 @@ func Load() (Credentials, error) {
 	credentials := Credentials{Path: path}
 	if exists {
 		credentials.Key = strings.TrimSpace(file.APIKey)
+		credentials.SavedKey = credentials.Key != ""
 		credentials.OAuth = cloneOAuth(file.OAuth)
 		if credentials.Key != "" {
 			credentials.Source = "auth.json"

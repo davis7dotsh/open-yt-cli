@@ -2,7 +2,8 @@
 
 `oytc analytics` needs authorization from the owner of the channel being reported. The CLI
 uses Google's OAuth 2.0 loopback flow with PKCE. It always requests the Analytics scope;
-it requests the Data API scope only when no API key is configured:
+it requests the Data API scope unless an API key is saved in `auth.json`. An environment-only
+`OYTC_API_KEY` does not narrow the grant because it may be unavailable in a later shell:
 
 - `https://www.googleapis.com/auth/yt-analytics.readonly` — Analytics reports
 - `https://www.googleapis.com/auth/youtube.readonly` — Data API reads for an OAuth-only
@@ -14,7 +15,7 @@ content-owner scopes.
 **Sensitive-scope caveat:** Google classifies `youtube.readonly` as **sensitive**.
 Accounts with Advanced Protection or restrictive Workspace policies hard-block (not just
 warn) unverified apps requesting sensitive scopes — consent fails with "This app is
-blocked". If that affects you, configure an API key so `oytc` requests only the
+blocked". If that affects you, save an API key with `oytc login` so `oytc` requests only the
 non-sensitive Analytics scope, or complete Google's app verification.
 
 ## 1. Create or select a Google Cloud project

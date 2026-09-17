@@ -93,10 +93,12 @@ precedence over the saved key.
 For analytics, follow [docs/oauth.md](docs/oauth.md), then run `oytc login --oauth`.
 `OYTC_OAUTH_CLIENT_ID` and `OYTC_OAUTH_CLIENT_SECRET` can bootstrap login non-interactively;
 otherwise `oytc` prompts for both (the secret without echo). OAuth always requests
-`yt-analytics.readonly` for Analytics reports. Without an API key, it also requests
-`youtube.readonly` so public-data commands work through OAuth. That scope is sensitive:
+`yt-analytics.readonly` for Analytics reports. Without an API key saved in `auth.json`,
+it also requests `youtube.readonly` so public-data commands work through OAuth. That
+scope is sensitive:
 accounts with Advanced Protection or restrictive Workspace policies hard-block unverified
-apps requesting it. Configure an API key or verify the consent app for those accounts.
+apps requesting it. Save an API key with `oytc login` or verify the consent app for those
+accounts.
 
 ## Security & config
 

@@ -98,8 +98,9 @@ If `OYTC_API_KEY` is set, `login` still saves the file but notes that the enviro
 variable remains the active, higher-precedence credential.
 
 `oytc login --oauth` runs a PKCE-protected loopback-browser flow and requests the
-read-only `yt-analytics.readonly` scope. Without an API key, it also requests
-`youtube.readonly` for Data API reads (that scope is sensitive; see [OAuth setup](oauth.md)
+read-only `yt-analytics.readonly` scope. Without an API key saved in `auth.json`, it also
+requests `youtube.readonly` for Data API reads (that scope is sensitive; see
+[OAuth setup](oauth.md)
 for the unverified-app caveat). It prints the authorization URL as a
 headless fallback, stores access/refresh tokens in the same protected file, and preserves
 an existing API key. Client credentials come from `OYTC_OAUTH_CLIENT_ID` and

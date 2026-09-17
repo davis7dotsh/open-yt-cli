@@ -22,11 +22,8 @@ const (
 	analyticsReadonlyScope = "https://www.googleapis.com/auth/yt-analytics.readonly"
 )
 
-// oauthScopes covers Analytics reports plus read-only Data API access, so an
-// OAuth-only setup (no API key) can run every public-data command too.
-// Caveat: youtube.readonly is classified sensitive; unverified apps requesting
-// it are hard-blocked for accounts with Advanced Protection or restrictive
-// Workspace policies. Such accounts must verify the consent app first.
+// An OAuth-only setup needs youtube.readonly for Data API reads. When an API
+// key is available, login requests only the non-sensitive Analytics scope.
 var oauthScopes = []string{analyticsReadonlyScope, youtubeReadonlyScope}
 
 func (a *App) authenticationCommands() []*cobra.Command {
@@ -116,7 +113,15 @@ func (a *App) loginOAuth(cmd *cobra.Command) error {
 		return &UsageError{Message: "OAuth client ID and client secret cannot be empty"}
 	}
 
-	token, err := oauth.Login(cmd.Context(), a.oauthConfig(clientID, clientSecret))
+	credentials, err := config.Load()
+	if err != nil {
+		return err
+	}
+	loginConfig := a.oauthConfig(clientID, clientSecret)
+	if credentials.Key != "" {
+		loginConfig.Scopes = []string{analyticsReadonlyScope}
+	}
+	token, err := oauth.Login(cmd.Context(), loginConfig)
 	if err != nil {
 		return fmt.Errorf("OAuth login failed: %w", err)
 	}
@@ -294,8 +299,10 @@ func (a *App) oauthTokenSource(credentials *config.OAuthCredentials) (*oauth.Tok
 	persisted := *credentials
 	persisted.Scopes = append([]string(nil), credentials.Scopes...)
 	clientID, clientSecret := credentials.ClientID, credentials.ClientSecret
+	refreshConfig := a.oauthConfig(clientID, clientSecret)
+	refreshConfig.Scopes = append([]string(nil), credentials.Scopes...)
 	source := &oauth.TokenSource{
-		Config: a.oauthConfig(clientID, clientSecret),
+		Config: refreshConfig,
 		Token: oauth.Token{
 			AccessToken:  credentials.AccessToken,
 			RefreshToken: credentials.RefreshToken,

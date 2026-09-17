@@ -72,7 +72,7 @@ func TestOAuthLoginLoopbackSavesWithoutClobberingAPIKey(t *testing.T) {
 		}
 		// x/oauth2 parses token responses by Content-Type.
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"access_token":"access-secret","refresh_token":"refresh-secret","expires_in":3600,"token_type":"Bearer","scope":"https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly"}`))
+		_, _ = w.Write([]byte(`{"access_token":"access-secret","refresh_token":"refresh-secret","expires_in":3600,"token_type":"Bearer","scope":"https://www.googleapis.com/auth/yt-analytics.readonly"}`))
 	}))
 	defer server.Close()
 	app, out, _ := testApp(server)
@@ -80,6 +80,9 @@ func TestOAuthLoginLoopbackSavesWithoutClobberingAPIKey(t *testing.T) {
 		parsed, err := url.Parse(target)
 		if err != nil {
 			return err
+		}
+		if scope := parsed.Query().Get("scope"); scope != analyticsReadonlyScope {
+			t.Errorf("requested scope = %q", scope)
 		}
 		callback := parsed.Query().Get("redirect_uri") + "?code=login-code&state=" + url.QueryEscape(parsed.Query().Get("state"))
 		go func() {
@@ -127,8 +130,8 @@ func TestAnalyticsCommands(t *testing.T) {
 		filters    string
 	}{
 		{"report", []string{"analytics", "report", "--metrics", "views,likes", "--dimensions", "day"}, "views,likes", "day", ""},
-		{"overview", []string{"analytics", "overview", "--by", "month"}, "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained", "month", ""},
-		{"video", []string{"analytics", "video", "video-id"}, "views,estimatedMinutesWatched,averageViewDuration,likes,comments,subscribersGained", "", "video==video-id"},
+		{"overview", []string{"analytics", "overview", "--by", "month"}, "views,engagedViews,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained", "month", ""},
+		{"video", []string{"analytics", "video", "video-id"}, "views,engagedViews,estimatedMinutesWatched,averageViewDuration,likes,comments,subscribersGained", "", "video==video-id"},
 		{"traffic", []string{"analytics", "traffic-sources"}, "views,estimatedMinutesWatched", "insightTrafficSourceType", ""},
 		{"demographics", []string{"analytics", "demographics"}, "viewerPercentage", "ageGroup,gender", ""},
 	}

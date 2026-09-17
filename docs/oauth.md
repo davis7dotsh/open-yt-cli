@@ -1,11 +1,12 @@
 # OAuth setup for YouTube Analytics
 
 `oytc analytics` needs authorization from the owner of the channel being reported. The CLI
-uses Google's OAuth 2.0 loopback flow with PKCE and requests two read-only scopes:
+uses Google's OAuth 2.0 loopback flow with PKCE. It always requests the Analytics scope;
+it requests the Data API scope only when no API key is configured:
 
 - `https://www.googleapis.com/auth/yt-analytics.readonly` — Analytics reports
-- `https://www.googleapis.com/auth/youtube.readonly` — Data API reads, so public-data
-  commands also work through OAuth when no API key is configured
+- `https://www.googleapis.com/auth/youtube.readonly` — Data API reads for an OAuth-only
+  setup, so public-data commands work without an API key
 
 `oytc` has no write commands and does not request upload, moderation, revenue, or
 content-owner scopes.
@@ -13,8 +14,8 @@ content-owner scopes.
 **Sensitive-scope caveat:** Google classifies `youtube.readonly` as **sensitive**.
 Accounts with Advanced Protection or restrictive Workspace policies hard-block (not just
 warn) unverified apps requesting sensitive scopes — consent fails with "This app is
-blocked". If that affects you, either complete Google's app verification for your consent
-app, or authorize from an account without those restrictions.
+blocked". If that affects you, configure an API key so `oytc` requests only the
+non-sensitive Analytics scope, or complete Google's app verification.
 
 ## 1. Create or select a Google Cloud project
 
@@ -22,15 +23,12 @@ Open the [Google Cloud console](https://console.cloud.google.com/) and create a 
 select the project already used for your API key). Confirm the intended project in the
 console's project picker before continuing.
 
-## 2. Enable both APIs
+## 2. Enable the APIs you need
 
-In **APIs & Services → Library**, enable:
+In **APIs & Services → Library**, enable **YouTube Analytics API**. If this project also
+serves Data API reads through OAuth or its own API key, enable **YouTube Data API v3**.
 
-1. **YouTube Data API v3**
-2. **YouTube Analytics API**
-
-The Data API serves public-data commands through OAuth; the Analytics API validates the
-OAuth credential and serves reports.
+The Analytics API validates the OAuth credential and serves reports.
 
 ## 3. Configure the OAuth consent screen
 
@@ -40,11 +38,8 @@ this **OAuth consent screen**):
 1. Create an app registration and supply the required app name and contact addresses.
 2. Choose **External** unless every account that will authorize belongs to one Google
    Workspace organization that you control.
-3. Add these scopes under **Data Access**:
-   - `.../auth/yt-analytics.readonly`
-   - `.../auth/youtube.readonly` (sensitive — see the caveat above; unverified apps
-     requesting it are hard-blocked for Advanced Protection and restrictive Workspace
-     accounts)
+3. Add `.../auth/yt-analytics.readonly` under **Data Access**. For OAuth-only public-data
+   reads, also add `.../auth/youtube.readonly` (sensitive — see the caveat above).
 4. While the app is in **Testing**, add each authorizing Google account as a test user.
 5. When ready, publish the app to **Production**.
 
@@ -54,7 +49,7 @@ publicly writable or broaden its scopes; it changes the consent app's publishing
 
 ### Unverified-app warning and user cap
 
-Because `youtube.readonly` is a sensitive scope, an unverified app will show a
+When OAuth login requests `youtube.readonly`, an unverified app will show a
 **“Google hasn't verified this app”** interstitial on most accounts. For an app you
 created and trust, use the warning's advanced path to continue, and inspect the requested
 scopes before approving. Accounts with Advanced Protection or restrictive Workspace
@@ -105,7 +100,7 @@ Paste the client ID at the normal prompt and the client secret at the no-echo pr
 
 `oytc` prints the authorization URL, attempts to open it in the default browser, and waits
 up to about three minutes on a random local loopback port. Sign in as the channel owner,
-review both requested read-only scopes (Analytics and Data API), and approve. The browser
+review the requested read-only scopes, and approve. The browser
 then redirects only to the local listener. On success, `oytc` exchanges the one-time code using PKCE and stores the client
 credentials and tokens in the protected `auth.json` file.
 

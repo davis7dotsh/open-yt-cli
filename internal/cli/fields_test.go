@@ -42,3 +42,18 @@ func TestFieldSelectorIncludesNestedSearchKind(t *testing.T) {
 		}
 	}
 }
+
+func TestFieldSelectorDistinguishesTopLevelMetadata(t *testing.T) {
+	for _, selector := range []string{"items", "items(nextPageToken)", "items/snippet/title"} {
+		if fieldSelectorIncludes(selector, "nextPageToken") {
+			t.Errorf("%q incorrectly includes top-level nextPageToken", selector)
+		}
+		fields, _ := fieldsWithRequired(selector, "nextPageToken")
+		if !fieldSelectorIncludes(fields, "nextPageToken") {
+			t.Errorf("%q did not acquire top-level nextPageToken: %q", selector, fields)
+		}
+	}
+	if !fieldSelectorIncludes("items", "items/id") {
+		t.Fatal("items should include nested item ID")
+	}
+}

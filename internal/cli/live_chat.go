@@ -53,10 +53,14 @@ func (a *App) liveChatListCommand() *cobra.Command {
 				return err
 			}
 			items := response.Items
+			nextPageToken := response.NextPageToken
 			if flags.limit > 0 && len(items) > flags.limit {
 				items = items[:flags.limit]
+				// The server token points past the entire fetched page. Returning
+				// it after discarding messages would skip those messages on resume.
+				nextPageToken = ""
 			}
-			return a.renderResult(youtube.ListResult{Items: items, NextPageToken: response.NextPageToken, Requests: requests + 1}, liveChatColumns())
+			return a.renderResult(youtube.ListResult{Items: items, NextPageToken: nextPageToken, Requests: requests + 1}, liveChatColumns())
 		},
 	}
 	addLiveChatFlags(cmd, &flags)
@@ -81,6 +85,8 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			requestFields, preserveID := fieldsWithRequired(flags.fields, "items/id")
+			flags.fields = requestFields
 			seen := newRecentIDs(liveChatDedupWindow)
 			emitted := 0
 			firstPage := true
@@ -105,6 +111,7 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 					}
 				}
 				if len(items) > 0 {
+					stripItemIDs(items, preserveID)
 					columns := a.columns
 					if len(columns) == 0 {
 						columns = liveChatColumns()
@@ -227,7 +234,11 @@ func liveChatParams(chatID string, flags liveChatFlags) url.Values {
 		"maxResults":       {fmt.Sprint(flags.pageSize)},
 		"profileImageSize": {fmt.Sprint(flags.profileSize)},
 	}
-	setValues(params, map[string]string{"pageToken": flags.pageToken, "fields": flags.fields})
+	fields := flags.fields
+	for _, required := range []string{"nextPageToken", "pollingIntervalMillis", "offlineAt"} {
+		fields, _ = fieldsWithRequired(fields, required)
+	}
+	setValues(params, map[string]string{"pageToken": flags.pageToken, "fields": fields})
 	return params
 }
 

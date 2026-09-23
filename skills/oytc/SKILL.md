@@ -38,7 +38,8 @@ oytc analytics traffic-sources --format jsonl
 oytc analytics demographics --format json
 ```
 
-Pagination: `--all` follows pages, `--limit N` caps output, `--page-token` resumes.
+Pagination: `--all` follows pages and `--limit N` caps output. Public lists resume
+with `--page-token`; Analytics resumes with `--start-index` from `nextStartIndex`.
 Trim payloads with `--parts` and `--fields` when you only need specific properties.
 
 ## Quota and safety

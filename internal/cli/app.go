@@ -346,21 +346,41 @@ func validateRequestedItems(resource string, requested []string, items []map[str
 }
 
 func (a *App) renderResult(result youtube.ListResult, defaultColumns []string) error {
+	format := a.outputFormat()
 	columns := a.columns
 	if len(columns) == 0 {
 		columns = defaultColumns
 	}
-	if err := output.Render(a.Out, result, output.Options{Format: a.outputFormat(), Columns: columns, NoHeader: a.noHeader}); err != nil {
+	if err := output.Render(a.Out, result, output.Options{Format: format, Columns: columns, NoHeader: a.noHeader}); err != nil {
 		return &UsageError{Message: err.Error()}
 	}
-	if !a.quiet && a.outputFormat() == "table" {
+	if result.CompletionUncertain {
+		fmt.Fprintln(a.Err, "warning: Analytics result may be incomplete; rerun time-grouped reports with --all, or narrow the date range or filters to verify coverage")
+	}
+	if a.quiet {
+		return nil
+	}
+	if format == "table" {
 		fmt.Fprintf(a.Err, "%d item(s), %d request(s)", len(result.Items), result.Requests)
-		if result.NextPageToken != "" {
-			fmt.Fprintf(a.Err, "; more available (next token: %s)", result.NextPageToken)
-		}
+		writeContinuationHint(a.Err, result, "; ")
 		fmt.Fprintln(a.Err)
+	} else if format == "jsonl" || format == "tsv" {
+		if result.NextPageToken != "" || result.NextStartIndex > 0 {
+			writeContinuationHint(a.Err, result, "")
+			fmt.Fprintln(a.Err)
+		}
 	}
 	return nil
+}
+
+func writeContinuationHint(w io.Writer, result youtube.ListResult, prefix string) {
+	if result.NextPageToken != "" {
+		fmt.Fprintf(w, "%smore available (resume with --page-token %s)", prefix, result.NextPageToken)
+		prefix = "; "
+	}
+	if result.NextStartIndex > 0 {
+		fmt.Fprintf(w, "%smore may be available (resume with --start-index %d)", prefix, result.NextStartIndex)
+	}
 }
 
 func (a *App) outputFormat() string {
@@ -491,7 +511,11 @@ func validateTimestamp(flag, value string) error {
 
 func validateCSVEnum(flag, value string, allowed ...string) error {
 	for _, entry := range strings.Split(value, ",") {
-		if err := validateEnum(flag, strings.TrimSpace(entry), allowed...); err != nil {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			return &UsageError{Message: fmt.Sprintf("%s cannot contain an empty value (choose from: %s)", flag, strings.Join(allowed, ", "))}
+		}
+		if err := validateEnum(flag, trimmed, allowed...); err != nil {
 			return err
 		}
 	}

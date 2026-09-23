@@ -18,9 +18,11 @@ type PageOptions struct {
 }
 
 type ListResult struct {
-	Items         []map[string]any `json:"items"`
-	NextPageToken string           `json:"nextPageToken,omitempty"`
-	Requests      int              `json:"requests"`
+	Items               []map[string]any `json:"items"`
+	NextPageToken       string           `json:"nextPageToken,omitempty"`
+	NextStartIndex      int              `json:"nextStartIndex,omitempty"`
+	CompletionUncertain bool             `json:"completionUncertain,omitempty"`
+	Requests            int              `json:"requests"`
 }
 
 // MaxListRequests bounds the `--all` pagination loop. It is deliberately far
@@ -31,6 +33,11 @@ type ListResult struct {
 const MaxListRequests = 10000
 
 func (c *Client) List(ctx context.Context, resource string, params url.Values, options PageOptions) (ListResult, error) {
+	// Partial responses must retain the token even when the caller only
+	// selects item fields. Otherwise --all looks successful after one page.
+	if fields := params.Get("fields"); fields != "" {
+		params.Set("fields", withPaginationField(fields))
+	}
 	if options.PageSize > 0 {
 		params.Set("maxResults", fmt.Sprint(options.PageSize))
 	}
@@ -94,6 +101,36 @@ func (c *Client) List(ctx context.Context, resource string, params url.Values, o
 		params.Set("pageToken", result.NextPageToken)
 	}
 	return result, nil
+}
+
+func withPaginationField(fields string) string {
+	if hasTopLevelField(fields, "nextPageToken") {
+		return fields
+	}
+	return fields + ",nextPageToken"
+}
+
+func hasTopLevelField(selector, target string) bool {
+	depth, start := 0, 0
+	for index := 0; index <= len(selector); index++ {
+		if index == len(selector) || selector[index] == ',' && depth == 0 {
+			field := strings.TrimSpace(selector[start:index])
+			if field == target || field == "*" {
+				return true
+			}
+			start = index + 1
+			continue
+		}
+		switch selector[index] {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	return false
 }
 
 var channelIDPattern = regexp.MustCompile(`^UC[A-Za-z0-9_-]{22}$`)

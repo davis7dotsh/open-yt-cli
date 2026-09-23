@@ -87,7 +87,7 @@ Without flags, prompts for a YouTube Data API key without terminal echo, validat
 a cheap `i18nLanguages.list` call, and atomically writes it as JSON to the config path. A
 key can also be piped on standard input for non-interactive secret injection; there is
 deliberately no `--api-key` flag, so the key never appears in shell history or the process
-table.
+table. The login prompt and `login --help` link to the API key setup guide.
 
 ```sh
 oytc login                       # interactive
@@ -105,14 +105,15 @@ for the unverified-app caveat). It prints the authorization URL as a
 headless fallback, stores access/refresh tokens in the same protected file, and preserves
 an existing API key. Client credentials come from `OYTC_OAUTH_CLIENT_ID` and
 `OYTC_OAUTH_CLIENT_SECRET` when set; missing values are prompted (the secret without echo).
-See [OAuth setup](oauth.md).
+The prompt and `login --help` link to [OAuth setup](oauth.md).
 
 ### `oytc status [--check]`
 
 Local-only by default. It reports the API key's source and SHA-256 fingerprint and the
 OAuth client ID, granted scopes, and token expiry — never the key, tokens, or client secret.
 `--check` validates each configured credential and may refresh/persist an expiring OAuth
-token.
+token. Even when no credential is configured, `status --check --format json` prints the
+status object before exiting 3, so scripts can inspect what is missing.
 
 ### `oytc logout`
 
@@ -130,7 +131,25 @@ yesterday). Every command accepts:
 | `--start YYYY-MM-DD` / `--end YYYY-MM-DD` | inclusive report range |
 | `--filters EXPR` | YouTube Analytics filter expression |
 | `--sort CSV` | sort fields, prefix descending fields with `-` |
-| `--limit N` | maximum rows, 1–200 (default 200; one Analytics API page) |
+| `--page-size N` | rows per Analytics request, 1–200 (default 200) |
+| `--all` | follow Analytics pages until the report is complete |
+| `--limit N` | cap total rows (0 = no cap; default 0) |
+| `--start-index N` | resume at a 1-based row index (default 1) |
+
+Without `--all`, Analytics fetches one page. A full time-grouped page may omit
+rows, so it sets `completionUncertain: true` and advises rerunning with `--all`
+instead of offering an unsafe index. Other full pages may include `nextStartIndex`
+for API-index resumption. Table/TSV/JSONL output prints safe continuation hints
+on stderr unless `--quiet` is set. `--page-size` is capped at 200 by the API.
+
+With `--all`, reports grouped by `day` or `month` use smaller date windows because
+the API can return an empty offset page while omitting rows from a long report.
+These results are ordered by date (descending with `--sort=-day` or `--sort=-month`),
+and `--start-index` refers to that order. Other sorts cannot be preserved across
+date windows and are rejected before a request. Reports without a time dimension
+use the API's row index. If the API ends that traversal after a full page and
+completeness cannot be verified, JSON includes `completionUncertain: true` and the
+CLI prints a warning on stderr. Narrow the date range or filters to verify coverage.
 
 Google's metric/dimension compatibility rules are authoritative. Incompatible combinations
 are returned verbatim as API errors.
@@ -142,6 +161,10 @@ Raw report command. `--metrics CSV` is required; `--dimensions CSV` is optional.
 ```sh
 oytc analytics report --metrics views,estimatedMinutesWatched \
   --dimensions day --start 2026-01-01 --end 2026-01-31 --sort day --format json
+
+# Fetch a long report, or resume from an earlier nextStartIndex.
+oytc analytics overview --by day --start 2026-01-01 --all --format json
+oytc analytics overview --by day --start 2026-01-01 --start-index 201 --format json
 ```
 
 ### Preset reports
@@ -169,9 +192,14 @@ formats and `--columns` work unchanged. Example JSON envelope:
 ```json
 {
   "items": [{"day": "2026-01-01", "views": 42}],
+  "nextStartIndex": 2,
   "requests": 1
 }
 ```
+
+`nextStartIndex` appears only when another page may exist. For time reports fetched
+with `--all`, it is an exact logical resume position when `--limit` stops early
+(this example uses `--all --limit 1`).
 
 ## Search
 
@@ -287,7 +315,9 @@ oytc live-chat stream --chat-id CHAT_ID --limit 500
 ```
 
 - `list` fetches exactly one finite page. `--all` is rejected there because a live-chat
-  next token represents *future polling*, not a static collection.
+  next token represents *future polling*, not a static collection. If `--limit` discards
+  messages from that page, the CLI omits the unsafe next token rather than suggesting a
+  resume point that would skip those messages.
 - `stream` continuously polls `liveChatMessages.list`. It is explicitly a **REST polling
   fallback**, not Google's lower-latency gRPC `streamList` method. It:
   - carries the returned page token forward;
@@ -375,14 +405,15 @@ Finite JSON output uses a stable envelope:
 }
 ```
 
-- JSONL emits exactly one resource per line (no envelope).
+- JSONL emits exactly one resource per line (no envelope). JSONL and TSV print a safe
+  continuation token on stderr when one is available, unless `--quiet` is set.
 - TSV/table cells replace embedded tabs and newlines so records stay one line.
 - YouTube counters (view counts etc.) are JSON strings in the API and are preserved as
   strings, avoiding integer precision loss.
 - Human table output prints an item/request summary on stderr unless `--quiet` is used.
-- When using `--fields` with pagination, keep `items` and `nextPageToken` in the selector;
-  for live streaming also retain `pollingIntervalMillis` and message `id` if continuation
-  and deduplication are desired.
+- The CLI retains the API metadata it needs for pagination and live-chat polling even
+  when `--fields` selects only item fields. This lets `--all` and `live-chat stream`
+  continue without requiring callers to list cursor or polling fields themselves.
 
 ## Pagination and quota
 
@@ -452,7 +483,7 @@ reason without exposing the key.
   Revenue/content-owner reports, uploads, moderation, and all mutations remain absent.
 - `/c/` custom channel URLs require a search and can resolve to the API's best match.
 - Live chat uses REST polling rather than the lower-latency official gRPC stream.
-- `--fields` is passed through verbatim, so excluding continuation metadata can
-  intentionally prevent pagination.
+- `--fields` selects resource fields; the CLI also requests the metadata needed to
+  paginate or poll safely.
 - Table defaults are intentionally compact; use JSON or custom `--columns` for full
   resources.

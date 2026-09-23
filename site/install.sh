@@ -214,6 +214,9 @@ esac
 
 say ""
 say "Next steps:"
-say "  oytc login              # save a YouTube Data API v3 key (see docs/google-api-key.md)"
+say "  oytc login              # save a YouTube Data API v3 key"
+say "  API key setup: https://github.com/${REPO}/blob/main/docs/google-api-key.md"
+say "  oytc login --oauth      # authorize read-only channel Analytics"
+say "  OAuth setup: https://github.com/${REPO}/blob/main/docs/oauth.md"
 say "  oytc status --check     # verify the key"
 say "  oytc update             # self-update later (oytc upgrade / oytc_update also work)"

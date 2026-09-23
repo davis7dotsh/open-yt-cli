@@ -18,13 +18,16 @@ sometimes `--hl` (localization).
 
 Public list commands use an API key (or fall back to an OAuth grant that includes
 `youtube.readonly`): `--page-size N`, `--page-token T`, `--all`, `--limit N`. Analytics
-commands always require OAuth.
+commands always require OAuth and use `--start-index` rather than `--page-token` to
+resume. For Analytics, `--page-size` is at most 200, `--all` fetches multiple pages,
+and `--limit` caps total rows. `--all` time reports use date windows and date order;
+for other reports, check `completionUncertain` before treating a result as complete.
 
 ## Commands
 
 | Command | Required input | Key flags |
 | --- | --- | --- |
-| `analytics report` **(OAuth)** | `--metrics CSV` | `--dimensions`, `--start/--end` (YYYY-MM-DD), `--filters`, `--sort`, `--limit` (1–200) |
+| `analytics report` **(OAuth)** | `--metrics CSV` | `--dimensions`, `--start/--end` (YYYY-MM-DD), `--filters`, `--sort`, `--all`, `--page-size`, `--limit`, `--start-index` |
 | `analytics overview` **(OAuth)** | — | `--by day\|month`, date/filter/sort/limit flags |
 | `analytics video <ID>` **(OAuth)** | owned video ID | core metrics; applies `video==ID`; date/filter/sort/limit flags |
 | `analytics traffic-sources` **(OAuth)** | — | groups views/watch time by traffic source |
@@ -62,6 +65,7 @@ commands always require OAuth.
 ```
 
 JSONL: one item object per line, no envelope. Numeric counters are strings.
+JSONL and TSV print available resume options on stderr unless `--quiet` is set.
 
 ## Exit codes
 

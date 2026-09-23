@@ -11,7 +11,7 @@ func fieldSelectorIncludes(selector, target string) bool {
 	parser := fieldSelectorParser{selector: selector}
 	for _, path := range parser.parseList(nil, 0) {
 		wildcardParent := strings.TrimSuffix(path, "/*")
-		if path == "*" || path == "items" || path == target || strings.HasPrefix(path, target+"/") || strings.HasPrefix(target, path+"/") || wildcardParent != path && strings.HasPrefix(target, wildcardParent+"/") {
+		if path == "*" || path == target || strings.HasPrefix(path, target+"/") || strings.HasPrefix(target, path+"/") || wildcardParent != path && strings.HasPrefix(target, wildcardParent+"/") {
 			return true
 		}
 	}

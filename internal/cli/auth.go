@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"time"
@@ -20,6 +21,8 @@ import (
 const (
 	youtubeReadonlyScope   = "https://www.googleapis.com/auth/youtube.readonly"
 	analyticsReadonlyScope = "https://www.googleapis.com/auth/yt-analytics.readonly"
+	apiKeySetupURL         = "https://github.com/davis7dotsh/open-yt-cli/blob/main/docs/google-api-key.md"
+	oauthSetupURL          = "https://github.com/davis7dotsh/open-yt-cli/blob/main/docs/oauth.md"
 )
 
 // An OAuth-only setup needs youtube.readonly for Data API reads. When an API
@@ -31,7 +34,11 @@ func (a *App) authenticationCommands() []*cobra.Command {
 	login := &cobra.Command{
 		Use:   "login",
 		Short: "Validate and save an API key or read-only OAuth authorization",
-		Args:  exactArgs(0),
+		Long: "Save a YouTube Data API v3 key for public data, or use --oauth to authorize\n" +
+			"read-only access to your channel and Analytics.\n\n" +
+			"Create an API key: " + apiKeySetupURL + "\n" +
+			"Create a Desktop OAuth client: " + oauthSetupURL,
+		Args: exactArgs(0),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if useOAuth {
 				return a.loginOAuth(cmd)
@@ -64,10 +71,14 @@ func (a *App) authenticationCommands() []*cobra.Command {
 }
 
 func (a *App) loginAPIKey(cmd *cobra.Command) error {
+	fmt.Fprintf(a.Err, "API key setup: %s\n", apiKeySetupURL)
 	fmt.Fprint(a.Err, "YouTube Data API key: ")
 	key, err := a.ReadSecret()
 	fmt.Fprintln(a.Err)
 	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return &UsageError{Message: "API key cannot be empty"}
+		}
 		return fmt.Errorf("read API key: %w", err)
 	}
 	key = strings.TrimSpace(key)
@@ -92,27 +103,41 @@ func (a *App) loginAPIKey(cmd *cobra.Command) error {
 func (a *App) loginOAuth(cmd *cobra.Command) error {
 	clientID, clientSecret := config.OAuthBootstrap()
 	var err error
+	if clientID == "" || clientSecret == "" {
+		fmt.Fprintf(a.Err, "Desktop OAuth client setup: %s\n", oauthSetupURL)
+	}
 	if clientID == "" {
 		fmt.Fprint(a.Err, "OAuth client ID: ")
 		clientID, err = a.stdinReader().ReadString('\n')
+		if err != nil {
+			fmt.Fprintln(a.Err)
+		}
 		if err != nil && strings.TrimSpace(clientID) == "" {
+			if errors.Is(err, io.EOF) {
+				return &UsageError{Message: "OAuth client ID cannot be empty"}
+			}
 			return fmt.Errorf("read OAuth client ID: %w", err)
 		}
 		clientID = strings.TrimSpace(clientID)
+		if clientID == "" {
+			return &UsageError{Message: "OAuth client ID cannot be empty"}
+		}
 	}
 	if clientSecret == "" {
 		fmt.Fprint(a.Err, "OAuth client secret: ")
 		clientSecret, err = a.ReadSecret()
 		fmt.Fprintln(a.Err)
 		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return &UsageError{Message: "OAuth client secret cannot be empty"}
+			}
 			return fmt.Errorf("read OAuth client secret: %w", err)
 		}
 		clientSecret = strings.TrimSpace(clientSecret)
+		if clientSecret == "" {
+			return &UsageError{Message: "OAuth client secret cannot be empty"}
+		}
 	}
-	if clientID == "" || clientSecret == "" {
-		return &UsageError{Message: "OAuth client ID and client secret cannot be empty"}
-	}
-
 	credentials, err := config.Load()
 	if err != nil {
 		return err
@@ -160,13 +185,11 @@ func (a *App) runStatus(cmd *cobra.Command, check bool) error {
 	if keyConfigured {
 		state["api_key"].(map[string]any)["fingerprint"] = config.Fingerprint(credentials.Key)
 	}
+	missingCredentials := check && !keyConfigured && !oauthConfigured
 	// Validate every configured credential before failing, so a stale API
 	// key cannot mask a working OAuth authorization (or vice versa).
 	var keyErr, oauthErr error
 	if check {
-		if !keyConfigured && !oauthConfigured {
-			return youtube.ErrMissingKey
-		}
 		if keyConfigured {
 			_, keyErr = a.client(credentials.Key).Get(cmd.Context(), "i18nLanguages", url.Values{"part": {"snippet"}})
 			state["api_key"].(map[string]any)["valid"] = keyErr == nil
@@ -177,7 +200,7 @@ func (a *App) runStatus(cmd *cobra.Command, check bool) error {
 		}
 	}
 
-	if a.outputFormat() != "table" {
+	if a.outputFormat() != "table" || len(a.columns) > 0 || a.noHeader {
 		columns := a.columns
 		if len(columns) == 0 {
 			columns = []string{"path", "api_key.configured", "api_key.source", "api_key.fingerprint", "oauth.configured", "oauth.client_id", "oauth.scopes", "oauth.expiry"}
@@ -187,6 +210,9 @@ func (a *App) runStatus(cmd *cobra.Command, check bool) error {
 		}
 		if err := output.RenderObject(a.Out, state, a.outputFormat(), columns, a.noHeader); err != nil {
 			return err
+		}
+		if missingCredentials {
+			return youtube.ErrMissingKey
 		}
 		return statusCheckError(keyErr, oauthErr)
 	}
@@ -205,6 +231,9 @@ func (a *App) runStatus(cmd *cobra.Command, check bool) error {
 		if oauthConfigured {
 			fmt.Fprintf(a.Out, "OAuth remote check: %s\n", checkVerdict(oauthErr))
 		}
+	}
+	if missingCredentials {
+		return youtube.ErrMissingKey
 	}
 	return statusCheckError(keyErr, oauthErr)
 }

@@ -16,11 +16,14 @@ import (
 var analyticsVideoIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 type analyticsFlags struct {
-	start   string
-	end     string
-	filters string
-	sort    string
-	limit   int
+	start      string
+	end        string
+	filters    string
+	sort       string
+	limit      int
+	pageSize   int
+	startIndex int
+	all        bool
 }
 
 func (a *App) analyticsCommand() *cobra.Command {
@@ -147,15 +150,39 @@ func (a *App) addAnalyticsFlags(cmd *cobra.Command, flags *analyticsFlags) {
 	cmd.Flags().StringVar(&flags.end, "end", end.Format(time.DateOnly), "report end date (YYYY-MM-DD; default: yesterday)")
 	cmd.Flags().StringVar(&flags.filters, "filters", "", "Analytics filter expression")
 	cmd.Flags().StringVar(&flags.sort, "sort", "", "comma-separated Analytics sort fields")
-	cmd.Flags().IntVar(&flags.limit, "limit", analytics.MaxResults, fmt.Sprintf("maximum rows (1-%d)", analytics.MaxResults))
+	cmd.Flags().IntVar(&flags.pageSize, "page-size", analytics.MaxResults, fmt.Sprintf("rows per request (1-%d)", analytics.MaxResults))
+	cmd.Flags().IntVar(&flags.startIndex, "start-index", 1, "1-based index of the first report row")
+	cmd.Flags().BoolVar(&flags.all, "all", false, "fetch all report pages")
+	cmd.Flags().IntVar(&flags.limit, "limit", 0, "maximum total rows (0 = no cap; requires --all to fetch multiple pages)")
 }
 
 func (a *App) runAnalytics(cmd *cobra.Command, flags analyticsFlags, query analytics.Query, defaultColumns []string) error {
 	if err := validateAnalyticsDates(flags.start, flags.end); err != nil {
 		return err
 	}
-	if flags.limit < 1 || flags.limit > analytics.MaxResults {
-		return &UsageError{Message: fmt.Sprintf("--limit must be between 1 and %d", analytics.MaxResults)}
+	if flags.limit < 0 {
+		return &UsageError{Message: "--limit must be non-negative"}
+	}
+	if flags.pageSize < 1 || flags.pageSize > analytics.MaxResults {
+		return &UsageError{Message: fmt.Sprintf("--page-size must be between 1 and %d", analytics.MaxResults)}
+	}
+	if flags.startIndex < 1 {
+		return &UsageError{Message: "--start-index must be at least 1"}
+	}
+	if flags.all {
+		timeDimension := ""
+		for _, dimension := range query.Dimensions {
+			if dimension == "day" {
+				timeDimension = "day"
+				break
+			}
+			if dimension == "month" {
+				timeDimension = "month"
+			}
+		}
+		if sortValue := strings.TrimSpace(flags.sort); timeDimension != "" && sortValue != "" && sortValue != timeDimension && sortValue != "-"+timeDimension {
+			return &UsageError{Message: fmt.Sprintf("--all with a %s dimension supports only --sort %s or --sort -%s", timeDimension, timeDimension, timeDimension)}
+		}
 	}
 	credentials, err := config.Load()
 	if err != nil {
@@ -184,6 +211,9 @@ func (a *App) runAnalytics(cmd *cobra.Command, flags analyticsFlags, query analy
 	}
 	query.Sort = flags.sort
 	query.Limit = flags.limit
+	query.PageSize = flags.pageSize
+	query.StartIndex = flags.startIndex
+	query.All = flags.all
 	result, err := client.Report(cmd.Context(), query)
 	if err != nil {
 		return oauthAuthHint(err)

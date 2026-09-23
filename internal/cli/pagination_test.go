@@ -286,11 +286,11 @@ func TestLiveChatStreamAddsInternalPartsWithoutExposingThem(t *testing.T) {
 				t.Errorf("fields %q omit %q", fields, required)
 			}
 		}
-		_, _ = w.Write([]byte(`{"items":[{"id":"gift","authorDetails":{"displayName":"Jane"},"snippet":{"giftEventDetails":{"giftMetadata":{"comboCount":2}}}}],"offlineAt":"2025-01-01T00:00:00Z"}`))
+		_, _ = w.Write([]byte(`{"items":[{"id":"gift","snippet":{"giftEventDetails":{"giftMetadata":{"comboCount":2}}}},{"id":"gift","authorDetails":{"displayName":"Jane"},"snippet":{"giftEventDetails":{"giftMetadata":{"comboCount":2}}}}],"offlineAt":"2025-01-01T00:00:00Z"}`))
 	}))
 	defer server.Close()
 	app, out, _ := testApp(server)
-	if err := execute(t, app, "live-chat", "stream", "--chat-id", "chat", "--parts", "authorDetails", "--fields", "items(authorDetails/displayName)", "--format", "jsonl"); err != nil {
+	if err := execute(t, app, "live-chat", "stream", "--chat-id", "chat", "--parts", "authorDetails", "--fields", "items(authorDetails/displayName)", "--format", "jsonl", "--limit", "1"); err != nil {
 		t.Fatal(err)
 	}
 	if strings.TrimSpace(out.String()) != `{"authorDetails":{"displayName":"Jane"}}` {

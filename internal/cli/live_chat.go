@@ -107,7 +107,15 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 				items := make([]map[string]any, 0, len(response.Items))
 				for _, item := range response.Items {
 					id, _ := item["id"].(string)
-					if id != "" && !seen.AddRevision(id, liveChatComboCount(item)) {
+					comboCount := liveChatComboCount(item)
+					if !preserveID {
+						delete(item, "id")
+					}
+					stripLiveChatInternalSnippet(item, preserveSnippetPart, preserveComboCount)
+					if len(item) == 0 {
+						continue
+					}
+					if id != "" && !seen.AddRevision(id, comboCount) {
 						continue
 					}
 					items = append(items, item)
@@ -116,8 +124,6 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 					}
 				}
 				if len(items) > 0 {
-					stripItemIDs(items, preserveID)
-					stripLiveChatInternalSnippet(items, preserveSnippetPart, preserveComboCount)
 					columns := a.columns
 					if len(columns) == 0 {
 						columns = liveChatColumns()
@@ -223,37 +229,35 @@ func liveChatPartsWithRequired(parts, required string) (string, bool) {
 	return parts + "," + required, false
 }
 
-func stripLiveChatInternalSnippet(items []map[string]any, preserveSnippet, preserveComboCount bool) {
-	for _, item := range items {
-		if !preserveSnippet {
-			delete(item, "snippet")
-			continue
-		}
-		if preserveComboCount {
-			continue
-		}
-		snippet, ok := item["snippet"].(map[string]any)
-		if !ok {
-			continue
-		}
-		giftEvent, ok := snippet["giftEventDetails"].(map[string]any)
-		if !ok {
-			continue
-		}
-		metadata, ok := giftEvent["giftMetadata"].(map[string]any)
-		if !ok {
-			continue
-		}
-		delete(metadata, "comboCount")
-		if len(metadata) == 0 {
-			delete(giftEvent, "giftMetadata")
-		}
-		if len(giftEvent) == 0 {
-			delete(snippet, "giftEventDetails")
-		}
-		if len(snippet) == 0 {
-			delete(item, "snippet")
-		}
+func stripLiveChatInternalSnippet(item map[string]any, preserveSnippet, preserveComboCount bool) {
+	if !preserveSnippet {
+		delete(item, "snippet")
+		return
+	}
+	if preserveComboCount {
+		return
+	}
+	snippet, ok := item["snippet"].(map[string]any)
+	if !ok {
+		return
+	}
+	giftEvent, ok := snippet["giftEventDetails"].(map[string]any)
+	if !ok {
+		return
+	}
+	metadata, ok := giftEvent["giftMetadata"].(map[string]any)
+	if !ok {
+		return
+	}
+	delete(metadata, "comboCount")
+	if len(metadata) == 0 {
+		delete(giftEvent, "giftMetadata")
+	}
+	if len(giftEvent) == 0 {
+		delete(snippet, "giftEventDetails")
+	}
+	if len(snippet) == 0 {
+		delete(item, "snippet")
 	}
 }
 

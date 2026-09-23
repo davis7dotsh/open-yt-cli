@@ -89,8 +89,25 @@ func (c *Client) Report(ctx context.Context, query Query) (youtube.ListResult, e
 		return youtube.ListResult{}, errors.New("analytics start index must be at least 1")
 	}
 	query.StartIndex = startIndex
+	dimension := reportTimeDimension(query.Dimensions)
+	if dimension == "month" {
+		start, err := time.Parse(time.DateOnly, query.StartDate)
+		if err != nil {
+			return youtube.ListResult{}, fmt.Errorf("invalid analytics start date: %w", err)
+		}
+		end, err := time.Parse(time.DateOnly, query.EndDate)
+		if err != nil {
+			return youtube.ListResult{}, fmt.Errorf("invalid analytics end date: %w", err)
+		}
+		if start.After(end) {
+			return youtube.ListResult{}, errors.New("analytics start date cannot be after end date")
+		}
+		// The Analytics API requires first-of-month bounds for the month dimension.
+		query.StartDate = monthStart(start).Format(time.DateOnly)
+		query.EndDate = monthStart(end).Format(time.DateOnly)
+	}
 	if query.All {
-		if dimension := reportTimeDimension(query.Dimensions); dimension != "" {
+		if dimension != "" {
 			query.Sort = strings.TrimSpace(query.Sort)
 			if query.Sort != "" && query.Sort != dimension && query.Sort != "-"+dimension {
 				return youtube.ListResult{}, fmt.Errorf("analytics --all with a %s dimension supports only --sort %s or --sort -%s; other sorts cannot be preserved across date windows", dimension, dimension, dimension)
@@ -196,6 +213,10 @@ type reportWindow struct {
 	end   time.Time
 }
 
+func monthStart(date time.Time) time.Time {
+	return time.Date(date.Year(), date.Month(), 1, 0, 0, 0, 0, date.Location())
+}
+
 func (c *Client) reportByTimeWindows(ctx context.Context, query Query, pageSize int, dimension string) (youtube.ListResult, error) {
 	start, err := time.Parse(time.DateOnly, query.StartDate)
 	if err != nil {
@@ -240,6 +261,19 @@ func (c *Client) reportByTimeWindows(ctx context.Context, query Query, pageSize 
 
 func reportDateWindows(start, end time.Time, dimension string, reverse bool, pageSize int) []reportWindow {
 	var windows []reportWindow
+	if dimension == "month" {
+		start, end = monthStart(start), monthStart(end)
+		if reverse {
+			for current := end; !current.Before(start); current = current.AddDate(0, -1, 0) {
+				windows = append(windows, reportWindow{start: current, end: current})
+			}
+		} else {
+			for current := start; !current.After(end); current = current.AddDate(0, 1, 0) {
+				windows = append(windows, reportWindow{start: current, end: current})
+			}
+		}
+		return windows
+	}
 	windowDays := 28
 	if pageSize <= windowDays {
 		windowDays = pageSize - 1
@@ -250,9 +284,6 @@ func reportDateWindows(start, end time.Time, dimension string, reverse bool, pag
 	if reverse {
 		for current := end; !current.Before(start); {
 			windowStart := current.AddDate(0, 0, 1-windowDays)
-			if dimension == "month" {
-				windowStart = time.Date(current.Year(), current.Month(), 1, 0, 0, 0, 0, time.UTC)
-			}
 			if windowStart.Before(start) {
 				windowStart = start
 			}
@@ -263,9 +294,6 @@ func reportDateWindows(start, end time.Time, dimension string, reverse bool, pag
 	}
 	for current := start; !current.After(end); {
 		windowEnd := current.AddDate(0, 0, windowDays-1)
-		if dimension == "month" {
-			windowEnd = time.Date(current.Year(), current.Month()+1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
-		}
 		if windowEnd.After(end) {
 			windowEnd = end
 		}

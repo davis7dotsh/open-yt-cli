@@ -48,7 +48,7 @@ for other reports, check `completionUncertain` before treating a result as compl
 | `comment threads` | exactly one of `--video`/`--channel`/`--id` | `--order time\|relevance`, `--search` (both incompatible with `--id`) |
 | `subscription list` | exactly one of `--channel`/`--id` | `--for-channel`, `--order` (incompatible with `--id`); many channels hide subscriptions → API error |
 | `live-chat list` | one of `--video`/`--chat-id` | finite single page; `--all` rejected |
-| `live-chat stream` | one of `--video`/`--chat-id` | JSONL default, `--limit`, `--page-token`; REST polling, respects `pollingIntervalMillis`, dedupes IDs, exits when chat ends |
+| `live-chat stream` | one of `--video`/`--chat-id` | JSONL default, `--limit`, `--page-token`; REST polling, respects `pollingIntervalMillis`, suppresses unchanged messages while retaining gift updates, exits when chat ends |
 | `category list` | one of `--region`/`--id` | |
 | `language list` / `region list` | — | |
 | `login [--oauth]` | API key, or Desktop OAuth client | no flag = API key; `--oauth` = loopback PKCE analytics authorization |

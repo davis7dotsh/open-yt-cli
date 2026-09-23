@@ -150,6 +150,9 @@ date windows and are rejected before a request. Reports without a time dimension
 use the API's row index. If the API ends that traversal after a full page and
 completeness cannot be verified, JSON includes `completionUncertain: true` and the
 CLI prints a warning on stderr. Narrow the date range or filters to verify coverage.
+For a `month` dimension, `--start` and `--end` select whole calendar months:
+January 20 through March 22 requests January through March. The CLI sends the
+first day of each month because the Analytics API requires those bounds.
 
 Google's metric/dimension compatibility rules are authoritative. Incompatible combinations
 are returned verbatim as API errors.
@@ -324,7 +327,7 @@ oytc live-chat stream --chat-id CHAT_ID --limit 500
   - waits at least `pollingIntervalMillis` between calls;
   - emits JSONL by default (TSV/table also available; `--format json` is rejected for an
     unbounded stream);
-  - deduplicates message IDs within the process;
+  - suppresses unchanged messages by ID while emitting gift combo-count updates;
   - supports `--page-token` for external resumption and `--limit` for bounded runs;
   - stops when the chat goes offline and exits cleanly on interruption.
 - `--page-size` (200–2000, default 500) and `--profile-image-size` (16–720) are validated

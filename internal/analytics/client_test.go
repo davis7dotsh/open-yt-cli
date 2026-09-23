@@ -266,6 +266,76 @@ func TestReportTimeWindowsApplyLogicalLimitAndReverseOrder(t *testing.T) {
 	}
 }
 
+func TestReportMonthDimensionUsesFirstDayBounds(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		all          bool
+		sort         string
+		wantRequests []string
+		wantMonths   []string
+	}{
+		{
+			name:         "single page",
+			wantRequests: []string{"2026-01-01:2026-03-01"},
+			wantMonths:   []string{"2026-01", "2026-02", "2026-03"},
+		},
+		{
+			name:         "all ascending",
+			all:          true,
+			wantRequests: []string{"2026-01-01:2026-01-01", "2026-02-01:2026-02-01", "2026-03-01:2026-03-01"},
+			wantMonths:   []string{"2026-01", "2026-02", "2026-03"},
+		},
+		{
+			name:         "all descending",
+			all:          true,
+			sort:         "-month",
+			wantRequests: []string{"2026-03-01:2026-03-01", "2026-02-01:2026-02-01", "2026-01-01:2026-01-01"},
+			wantMonths:   []string{"2026-03", "2026-02", "2026-01"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var requests []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				query := r.URL.Query()
+				requests = append(requests, query.Get("startDate")+":"+query.Get("endDate"))
+				start, startErr := time.Parse(time.DateOnly, query.Get("startDate"))
+				end, endErr := time.Parse(time.DateOnly, query.Get("endDate"))
+				if startErr != nil || endErr != nil || start.Day() != 1 || end.Day() != 1 {
+					t.Errorf("invalid monthly query = %s", r.URL.RawQuery)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				var rows [][]any
+				for date := start; !date.After(end); date = date.AddDate(0, 1, 0) {
+					rows = append(rows, []any{date.Format("2006-01")})
+				}
+				_ = json.NewEncoder(w).Encode(Response{ColumnHeaders: []ColumnHeader{{Name: "month"}}, Rows: rows})
+			}))
+			defer server.Close()
+			client := NewClient(func(context.Context, bool) (string, error) { return "analytics-token", nil }, time.Second)
+			client.SetBaseURL(server.URL)
+			client.SetHTTPClient(server.Client())
+			result, err := client.Report(context.Background(), Query{
+				StartDate: "2026-01-20", EndDate: "2026-03-22", Metrics: []string{"views"},
+				Dimensions: []string{"month"}, PageSize: 4, Sort: test.sort, All: test.all,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(requests, test.wantRequests) {
+				t.Errorf("requests = %v, want %v", requests, test.wantRequests)
+			}
+			var months []string
+			for _, item := range result.Items {
+				months = append(months, item["month"].(string))
+			}
+			if !reflect.DeepEqual(months, test.wantMonths) || result.Requests != len(test.wantRequests) {
+				t.Errorf("result = %v across %d requests, want %v across %d", months, result.Requests, test.wantMonths, len(test.wantRequests))
+			}
+		})
+	}
+}
+
 func TestReportTimeWindowsResumeOrderUnaffectedByChangedMetrics(t *testing.T) {
 	metricChanged := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

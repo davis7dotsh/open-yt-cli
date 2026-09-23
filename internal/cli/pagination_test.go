@@ -155,10 +155,13 @@ func TestLiveChatStreamPartialFieldsKeepPollingAndDedupPrivate(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		request := requests.Add(1)
 		fields := r.URL.Query().Get("fields")
-		for _, required := range []string{"items/snippet/displayMessage", "items/id", "nextPageToken", "pollingIntervalMillis", "offlineAt"} {
+		for _, required := range []string{"items/snippet/displayMessage", "items/id", "items/snippet/giftEventDetails/giftMetadata/comboCount", "nextPageToken", "pollingIntervalMillis", "offlineAt"} {
 			if !fieldSelectorIncludes(fields, required) {
 				t.Errorf("fields %q omit %q", fields, required)
 			}
+		}
+		if parts := r.URL.Query().Get("part"); !strings.Contains(parts, "id") || !strings.Contains(parts, "snippet") {
+			t.Errorf("parts = %q, need id and snippet", parts)
 		}
 		switch request {
 		case 1:
@@ -230,5 +233,67 @@ func TestLiveChatStreamItemsSelectorPreservesTopLevelPollingMetadata(t *testing.
 	}
 	if requests.Load() != 2 || bytes.Count(out.Bytes(), []byte(`"id":"a"`)) != 1 || bytes.Count(out.Bytes(), []byte(`"id":"b"`)) != 1 {
 		t.Fatalf("requests = %d, output = %s", requests.Load(), out.String())
+	}
+}
+
+func TestLiveChatStreamEmitsGiftComboUpdatesOnlyOnce(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "key")
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		request := requests.Add(1)
+		if parts := r.URL.Query().Get("part"); !strings.Contains(parts, "id") || !strings.Contains(parts, "snippet") {
+			t.Errorf("parts = %q, need id and snippet", parts)
+		}
+		switch request {
+		case 1:
+			_, _ = w.Write([]byte(`{"items":[{"id":"gift","snippet":{"type":"giftEvent","giftEventDetails":{"giftMetadata":{"comboCount":1}}}},{"id":"text","snippet":{"type":"textMessageEvent","displayMessage":"hello"}}],"nextPageToken":"poll-again","pollingIntervalMillis":1}`))
+		case 2:
+			_, _ = w.Write([]byte(`{"items":[{"id":"gift","snippet":{"type":"giftEvent","giftEventDetails":{"giftMetadata":{"comboCount":1}}}},{"id":"gift","snippet":{"type":"giftEvent","giftEventDetails":{"giftMetadata":{"comboCount":2}}}},{"id":"text","snippet":{"type":"textMessageEvent","displayMessage":"edited"}}],"offlineAt":"2025-01-01T00:00:00Z"}`))
+		default:
+			t.Errorf("unexpected request %d", request)
+		}
+	}))
+	defer server.Close()
+	app, out, _ := testApp(server)
+	if err := execute(t, app, "live-chat", "stream", "--chat-id", "chat", "--format", "jsonl"); err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(out.Bytes()), []byte("\n"))
+	if requests.Load() != 2 || len(lines) != 3 {
+		t.Fatalf("requests = %d, output = %s", requests.Load(), out.String())
+	}
+	for index, expected := range []string{`"comboCount":1`, `"displayMessage":"hello"`, `"comboCount":2`} {
+		if !bytes.Contains(lines[index], []byte(expected)) {
+			t.Fatalf("message %d = %s, want %s", index, lines[index], expected)
+		}
+	}
+}
+
+func TestLiveChatStreamAddsInternalPartsWithoutExposingThem(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "key")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		parts := r.URL.Query().Get("part")
+		for _, required := range []string{"authorDetails", "id", "snippet"} {
+			if !strings.Contains(parts, required) {
+				t.Errorf("parts %q omit %q", parts, required)
+			}
+		}
+		fields := r.URL.Query().Get("fields")
+		for _, required := range []string{"items/authorDetails/displayName", "items/id", "items/snippet/giftEventDetails/giftMetadata/comboCount"} {
+			if !fieldSelectorIncludes(fields, required) {
+				t.Errorf("fields %q omit %q", fields, required)
+			}
+		}
+		_, _ = w.Write([]byte(`{"items":[{"id":"gift","authorDetails":{"displayName":"Jane"},"snippet":{"giftEventDetails":{"giftMetadata":{"comboCount":2}}}}],"offlineAt":"2025-01-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+	app, out, _ := testApp(server)
+	if err := execute(t, app, "live-chat", "stream", "--chat-id", "chat", "--parts", "authorDetails", "--fields", "items(authorDetails/displayName)", "--format", "jsonl"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(out.String()) != `{"authorDetails":{"displayName":"Jane"}}` {
+		t.Fatalf("internal fields exposed: %s", out.String())
 	}
 }

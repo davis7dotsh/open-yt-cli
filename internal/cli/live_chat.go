@@ -72,7 +72,7 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 	var flags liveChatFlags
 	cmd := &cobra.Command{
 		Use: "stream", Short: "Continuously poll live chat and emit deduplicated messages", Args: exactArgs(0),
-		Long: "Continuously polls liveChatMessages.list, respects pollingIntervalMillis, carries page tokens, and deduplicates IDs. This first draft is a REST polling fallback, not the official gRPC streamList method. JSONL is the default stream format.",
+		Long: "Continuously polls liveChatMessages.list, respects pollingIntervalMillis, carries page tokens, and deduplicates unchanged messages. Gift combo count updates are emitted. This first draft is a REST polling fallback, not the official gRPC streamList method. JSONL is the default stream format.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			format := a.outputFormat()
 			if a.format == "" {
@@ -85,8 +85,13 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			requestFields, preserveID := fieldsWithRequired(flags.fields, "items/id")
+			var preserveIDPart, preserveSnippetPart bool
+			flags.parts, preserveIDPart = liveChatPartsWithRequired(flags.parts, "id")
+			flags.parts, preserveSnippetPart = liveChatPartsWithRequired(flags.parts, "snippet")
+			requestFields, preserveIDField := fieldsWithRequired(flags.fields, "items/id")
+			requestFields, preserveComboCount := fieldsWithRequired(requestFields, "items/snippet/giftEventDetails/giftMetadata/comboCount")
 			flags.fields = requestFields
+			preserveID := preserveIDField && (preserveIDPart || !cmd.Flags().Changed("parts"))
 			seen := newRecentIDs(liveChatDedupWindow)
 			emitted := 0
 			firstPage := true
@@ -102,7 +107,7 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 				items := make([]map[string]any, 0, len(response.Items))
 				for _, item := range response.Items {
 					id, _ := item["id"].(string)
-					if id != "" && !seen.Add(id) {
+					if id != "" && !seen.AddRevision(id, liveChatComboCount(item)) {
 						continue
 					}
 					items = append(items, item)
@@ -112,6 +117,7 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 				}
 				if len(items) > 0 {
 					stripItemIDs(items, preserveID)
+					stripLiveChatInternalSnippet(items, preserveSnippetPart, preserveComboCount)
 					columns := a.columns
 					if len(columns) == 0 {
 						columns = liveChatColumns()
@@ -154,18 +160,29 @@ func liveChatPollingInterval(milliseconds int64) time.Duration {
 }
 
 type recentIDs struct {
-	values   map[string]struct{}
+	values   map[string]string
 	order    []string
 	next     int
 	capacity int
 }
 
 func newRecentIDs(capacity int) *recentIDs {
-	return &recentIDs{values: make(map[string]struct{}, capacity), order: make([]string, 0, capacity), capacity: capacity}
+	return &recentIDs{values: make(map[string]string, capacity), order: make([]string, 0, capacity), capacity: capacity}
 }
 
 func (r *recentIDs) Add(value string) bool {
-	if _, exists := r.values[value]; exists {
+	return r.AddRevision(value, "")
+}
+
+func (r *recentIDs) AddRevision(value, revision string) bool {
+	if previous, exists := r.values[value]; exists {
+		if previous == revision {
+			return false
+		}
+		r.values[value] = revision
+		return true
+	}
+	if r.capacity == 0 {
 		return false
 	}
 	if len(r.order) < r.capacity {
@@ -175,8 +192,69 @@ func (r *recentIDs) Add(value string) bool {
 		r.order[r.next] = value
 		r.next = (r.next + 1) % r.capacity
 	}
-	r.values[value] = struct{}{}
+	r.values[value] = revision
 	return true
+}
+
+func liveChatComboCount(item map[string]any) string {
+	value := any(item)
+	for _, key := range []string{"snippet", "giftEventDetails", "giftMetadata", "comboCount"} {
+		object, ok := value.(map[string]any)
+		if !ok {
+			return ""
+		}
+		value, ok = object[key]
+		if !ok {
+			return ""
+		}
+	}
+	return fmt.Sprint(value)
+}
+
+func liveChatPartsWithRequired(parts, required string) (string, bool) {
+	for _, part := range strings.Split(parts, ",") {
+		if strings.TrimSpace(part) == required {
+			return parts, true
+		}
+	}
+	if strings.TrimSpace(parts) == "" {
+		return required, false
+	}
+	return parts + "," + required, false
+}
+
+func stripLiveChatInternalSnippet(items []map[string]any, preserveSnippet, preserveComboCount bool) {
+	for _, item := range items {
+		if !preserveSnippet {
+			delete(item, "snippet")
+			continue
+		}
+		if preserveComboCount {
+			continue
+		}
+		snippet, ok := item["snippet"].(map[string]any)
+		if !ok {
+			continue
+		}
+		giftEvent, ok := snippet["giftEventDetails"].(map[string]any)
+		if !ok {
+			continue
+		}
+		metadata, ok := giftEvent["giftMetadata"].(map[string]any)
+		if !ok {
+			continue
+		}
+		delete(metadata, "comboCount")
+		if len(metadata) == 0 {
+			delete(giftEvent, "giftMetadata")
+		}
+		if len(giftEvent) == 0 {
+			delete(snippet, "giftEventDetails")
+		}
+		if len(snippet) == 0 {
+			delete(item, "snippet")
+		}
+	}
 }
 
 func addLiveChatFlags(cmd *cobra.Command, flags *liveChatFlags) {

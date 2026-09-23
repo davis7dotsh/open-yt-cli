@@ -162,9 +162,9 @@ Raw report command. `--metrics CSV` is required; `--dimensions CSV` is optional.
 oytc analytics report --metrics views,estimatedMinutesWatched \
   --dimensions day --start 2026-01-01 --end 2026-01-31 --sort day --format json
 
-# Fetch a long report, or resume from an earlier nextStartIndex.
-oytc analytics overview --by day --start 2026-01-01 --all --format json
-oytc analytics overview --by day --start 2026-01-01 --start-index 201 --format json
+# Fetch 200 rows, then resume with the returned nextStartIndex and identical flags.
+oytc analytics overview --by day --start 2026-01-01 --all --limit 200 --format json
+oytc analytics overview --by day --start 2026-01-01 --all --limit 200 --start-index 201 --format json
 ```
 
 ### Preset reports

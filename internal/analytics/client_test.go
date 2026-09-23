@@ -123,6 +123,48 @@ func TestReportFullSinglePageOffersResumeIndex(t *testing.T) {
 	}
 }
 
+func TestReportTimeOffsetShortNonemptyPageSignalsUncertainCompletion(t *testing.T) {
+	var requestedIndexes []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("maxResults"); got != "3" {
+			t.Errorf("maxResults = %s", got)
+		}
+		requestedIndexes = append(requestedIndexes, r.URL.Query().Get("startIndex"))
+		_ = json.NewEncoder(w).Encode(Response{
+			ColumnHeaders: []ColumnHeader{{Name: "day"}, {Name: "views"}},
+			Rows:          [][]any{{"2026-01-03", 3}, {"2026-01-04", 4}},
+		})
+	}))
+	defer server.Close()
+	client := NewClient(func(context.Context, bool) (string, error) { return "analytics-token", nil }, time.Second)
+	client.SetBaseURL(server.URL)
+	client.SetHTTPClient(server.Client())
+	query := Query{
+		StartDate: "2026-01-01", EndDate: "2026-01-04", Metrics: []string{"views"},
+		Dimensions: []string{"day"}, PageSize: 3,
+	}
+
+	firstPage, err := client.Report(context.Background(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstPage.CompletionUncertain {
+		t.Fatalf("first page unexpectedly uncertain: %#v", firstPage)
+	}
+
+	query.StartIndex = 3
+	resumed, err := client.Report(context.Background(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resumed.Items) != 2 || resumed.Requests != 1 || resumed.NextStartIndex != 0 || !resumed.CompletionUncertain {
+		t.Fatalf("short offset result = %#v", resumed)
+	}
+	if !reflect.DeepEqual(requestedIndexes, []string{"1", "3"}) {
+		t.Fatalf("requested indexes = %v", requestedIndexes)
+	}
+}
+
 func TestReportTimeWindowsRecoverRowsHiddenByBrokenOffset(t *testing.T) {
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -221,6 +263,50 @@ func TestReportTimeWindowsApplyLogicalLimitAndReverseOrder(t *testing.T) {
 	}
 	if result.Requests != 3 || result.NextStartIndex != 4 || len(result.Items) != 2 || result.Items[0]["day"] != "2026-01-04" || result.Items[1]["day"] != "2026-01-03" {
 		t.Fatalf("reverse bounded result = %#v", result)
+	}
+}
+
+func TestReportTimeWindowsResumeOrderUnaffectedByChangedMetrics(t *testing.T) {
+	metricChanged := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if query.Get("dimensions") != "day,video" || query.Get("startIndex") != "1" {
+			t.Errorf("window query = %s", r.URL.RawQuery)
+		}
+		rows := [][]any{{"2026-01-01", "video-b", 10}, {"2026-01-01", "video-a", 20}}
+		if metricChanged {
+			rows = [][]any{{"2026-01-01", "video-a", 1}, {"2026-01-01", "video-b", 30}}
+		}
+		_ = json.NewEncoder(w).Encode(Response{
+			ColumnHeaders: []ColumnHeader{{Name: "day"}, {Name: "video"}, {Name: "estimatedMinutesWatched"}},
+			Rows:          rows,
+		})
+	}))
+	defer server.Close()
+	client := NewClient(func(context.Context, bool) (string, error) { return "analytics-token", nil }, time.Second)
+	client.SetBaseURL(server.URL)
+	client.SetHTTPClient(server.Client())
+	query := Query{
+		StartDate: "2026-01-01", EndDate: "2026-01-01", Metrics: []string{"estimatedMinutesWatched"},
+		Dimensions: []string{"day", "video"}, PageSize: 3, Limit: 1, All: true,
+	}
+
+	first, err := client.Report(context.Background(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 1 || first.Items[0]["video"] != "video-a" || first.NextStartIndex != 2 {
+		t.Fatalf("first result = %#v", first)
+	}
+
+	metricChanged = true
+	query.StartIndex = first.NextStartIndex
+	resumed, err := client.Report(context.Background(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resumed.Items) != 1 || resumed.Items[0]["video"] != "video-b" || resumed.NextStartIndex != 0 {
+		t.Fatalf("resumed result = %#v", resumed)
 	}
 }
 

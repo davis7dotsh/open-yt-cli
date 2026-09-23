@@ -105,6 +105,7 @@ func (c *Client) reportByIndex(ctx context.Context, query Query, pageSize int) (
 	startIndex := query.StartIndex
 	result := youtube.ListResult{Items: make([]map[string]any, 0)}
 	sawFullPage := false
+	hasTimeDimension := reportTimeDimension(query.Dimensions) != ""
 	for {
 		requestSize := pageSize
 		if remaining := query.Limit - len(result.Items); query.Limit > 0 && remaining < requestSize {
@@ -121,10 +122,10 @@ func (c *Client) reportByIndex(ctx context.Context, query Query, pageSize int) (
 		result.Items = append(result.Items, Normalize(response)...)
 		result.NextStartIndex = 0
 		if len(response.Rows) < requestSize {
-			// The live Analytics API has returned an empty second page for a
-			// report whose first page omitted known rows. Without a time
-			// dimension we cannot split the date range without changing metrics.
-			result.CompletionUncertain = (query.All && sawFullPage) || (query.StartIndex > 1 && len(response.Rows) == 0)
+			// The API may omit time rows at an offset even when it returns a
+			// nonempty short page. A short page after a full --all page can
+			// also hide rows without a safe date-window split.
+			result.CompletionUncertain = (query.All && sawFullPage) || (query.StartIndex > 1 && (hasTimeDimension || len(response.Rows) == 0))
 			break
 		}
 		sawFullPage = true
@@ -135,7 +136,7 @@ func (c *Client) reportByIndex(ctx context.Context, query Query, pageSize int) (
 		// A full page might be the final page; another request is needed to
 		// establish whether more rows exist.
 		result.NextStartIndex = startIndex
-		if !query.All && reportTimeDimension(query.Dimensions) != "" {
+		if !query.All && hasTimeDimension {
 			// The API's offset can skip known time rows, while --all uses a
 			// chronological order. This API index cannot safely resume that order.
 			result.NextStartIndex = 0
@@ -307,10 +308,10 @@ func (c *Client) completeTimeWindow(ctx context.Context, query Query, pageSize i
 	if len(response.Rows) == pageSize && (len(query.Dimensions) > 1 || pageSize > 1) {
 		return nil, fmt.Errorf("analytics returned a full %s window (%s to %s); the API may omit rows and this report cannot be verified complete", dimension, window.start.Format(time.DateOnly), window.end.Format(time.DateOnly))
 	}
-	return sortTimeRows(Normalize(response), dimension, reverse)
+	return sortTimeRows(Normalize(response), query.Dimensions, dimension, reverse)
 }
 
-func sortTimeRows(items []map[string]any, dimension string, reverse bool) ([]map[string]any, error) {
+func sortTimeRows(items []map[string]any, dimensions []string, dimension string, reverse bool) ([]map[string]any, error) {
 	type keyedRow struct {
 		item map[string]any
 		date string
@@ -322,7 +323,15 @@ func sortTimeRows(items []map[string]any, dimension string, reverse bool) ([]map
 		if !ok {
 			return nil, fmt.Errorf("analytics response omitted %s dimension; cannot order rows safely", dimension)
 		}
-		encoded, err := json.Marshal(item)
+		// Metrics can change between a limited run and its resumed run. Only
+		// dimension values may determine the order of rows within a date.
+		tie := make([]any, 0, len(dimensions)-1)
+		for _, name := range dimensions {
+			if name != dimension {
+				tie = append(tie, item[name])
+			}
+		}
+		encoded, err := json.Marshal(tie)
 		if err != nil {
 			return nil, err
 		}

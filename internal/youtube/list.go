@@ -33,9 +33,10 @@ type ListResult struct {
 const MaxListRequests = 10000
 
 func (c *Client) List(ctx context.Context, resource string, params url.Values, options PageOptions) (ListResult, error) {
-	// Partial responses must retain the token even when the caller only
-	// selects item fields. Otherwise --all looks successful after one page.
-	if fields := params.Get("fields"); fields != "" {
+	// Partial responses on paginated endpoints must retain the token even
+	// when the caller only selects item fields. The finite reference lists do
+	// not define nextPageToken, so requesting it makes their fields invalid.
+	if fields := params.Get("fields"); fields != "" && !finiteListResource(resource) {
 		params.Set("fields", withPaginationField(fields))
 	}
 	if options.PageSize > 0 {
@@ -101,6 +102,15 @@ func (c *Client) List(ctx context.Context, resource string, params url.Values, o
 		params.Set("pageToken", result.NextPageToken)
 	}
 	return result, nil
+}
+
+func finiteListResource(resource string) bool {
+	switch resource {
+	case "videoCategories", "i18nLanguages", "i18nRegions":
+		return true
+	default:
+		return false
+	}
 }
 
 func withPaginationField(fields string) string {

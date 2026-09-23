@@ -105,6 +105,29 @@ func TestSearchRejectsEmptyTypeEntry(t *testing.T) {
 	}
 }
 
+func TestSearchUsesDefaultTypes(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "key")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("type"); got != "video,channel,playlist" {
+			t.Errorf("default type filter = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"items":[{"id":{"kind":"youtube#video","videoId":"v1"}}]}`))
+	}))
+	defer server.Close()
+	app, out, _ := testApp(server)
+	if err := execute(t, app, "search", "example", "--format", "json"); err != nil {
+		t.Fatal(err)
+	}
+	var result youtube.ListResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("missing search result: %s", out.String())
+	}
+}
+
 func TestLiveChatListLimitClearsUnsafeResumeToken(t *testing.T) {
 	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
 	t.Setenv("OYTC_API_KEY", "key")

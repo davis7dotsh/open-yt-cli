@@ -17,7 +17,7 @@ func (a *App) versionCommand() *cobra.Command {
 		Args:  exactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			info := version.Get()
-			if a.outputFormat() != "table" {
+			if a.outputFormat() != "table" || len(a.columns) > 0 || a.noHeader {
 				state := map[string]any{
 					"version":   info.Version,
 					"commit":    info.Commit,

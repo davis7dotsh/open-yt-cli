@@ -103,6 +103,9 @@ try {
     Write-Host ''
     Write-Host 'Next steps:'
     Write-Host '  oytc login              # save a YouTube Data API v3 key'
+    Write-Host "  API key setup: https://github.com/$Repo/blob/main/docs/google-api-key.md"
+    Write-Host '  oytc login --oauth      # authorize read-only channel Analytics'
+    Write-Host "  OAuth setup: https://github.com/$Repo/blob/main/docs/oauth.md"
     Write-Host '  oytc status --check     # verify the key'
     Write-Host '  oytc update             # self-update later'
 } finally {

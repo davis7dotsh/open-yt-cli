@@ -20,7 +20,7 @@ Cheaper and more complete than search:
 
 ```sh
 oytc channel uploads @handle --all --format jsonl \
-  --fields 'items(contentDetails/videoId,snippet/title,snippet/publishedAt),nextPageToken'
+  --fields 'items(contentDetails/videoId,snippet/title,snippet/publishedAt)'
 ```
 
 Then batch stats (50 IDs per request):
@@ -75,9 +75,12 @@ oytc analytics report --metrics views,estimatedMinutesWatched \
   --dimensions day --filters 'video==VIDEO_ID' --sort day --format json
 ```
 
-Analytics always targets `channel==MINE`, accepts at most 200 rows per invocation, and
-passes Google's metric/dimension compatibility errors through. It cannot report revenue or
-another user's channel.
+Analytics always targets `channel==MINE` and accepts at most 200 rows per API request.
+Use `--all` for long time reports and resume with `--start-index` when the JSON envelope
+includes `nextStartIndex`. Date-window results are ordered by date; a non-time report
+may set `completionUncertain` when the API cannot prove it returned every row.
+Google's metric/dimension compatibility errors pass through.
+It cannot report revenue or another user's channel.
 
 ## Check AI-training permission for a video (no key, no quota)
 
@@ -90,4 +93,6 @@ oytc video trainability VIDEO_ID --format json
 - Check exit codes: retry only on 6, surface 3 (run `login` or `login --oauth` as hinted)
   and 5 (quota) to the user.
 - Resume long enumerations with the `nextPageToken` from the JSON envelope + `--page-token`.
+- Resume Analytics reports with `nextStartIndex` + `--start-index`; check any
+  `completionUncertain` signal before treating a long report as complete.
 - Keep counter fields as strings; they can exceed float64-safe integers.

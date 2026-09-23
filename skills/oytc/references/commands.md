@@ -18,13 +18,16 @@ sometimes `--hl` (localization).
 
 Public list commands use an API key (or fall back to an OAuth grant that includes
 `youtube.readonly`): `--page-size N`, `--page-token T`, `--all`, `--limit N`. Analytics
-commands always require OAuth.
+commands always require OAuth and use `--start-index` rather than `--page-token` to
+resume. For Analytics, `--page-size` is at most 200, `--all` fetches multiple pages,
+and `--limit` caps total rows. `--all` time reports use date windows and date order;
+for other reports, check `completionUncertain` before treating a result as complete.
 
 ## Commands
 
 | Command | Required input | Key flags |
 | --- | --- | --- |
-| `analytics report` **(OAuth)** | `--metrics CSV` | `--dimensions`, `--start/--end` (YYYY-MM-DD), `--filters`, `--sort`, `--limit` (1–200) |
+| `analytics report` **(OAuth)** | `--metrics CSV` | `--dimensions`, `--start/--end` (YYYY-MM-DD), `--filters`, `--sort`, `--all`, `--page-size`, `--limit`, `--start-index` |
 | `analytics overview` **(OAuth)** | — | `--by day\|month`, date/filter/sort/limit flags |
 | `analytics video <ID>` **(OAuth)** | owned video ID | core metrics; applies `video==ID`; date/filter/sort/limit flags |
 | `analytics traffic-sources` **(OAuth)** | — | groups views/watch time by traffic source |
@@ -45,7 +48,7 @@ commands always require OAuth.
 | `comment threads` | exactly one of `--video`/`--channel`/`--id` | `--order time\|relevance`, `--search` (both incompatible with `--id`) |
 | `subscription list` | exactly one of `--channel`/`--id` | `--for-channel`, `--order` (incompatible with `--id`); many channels hide subscriptions → API error |
 | `live-chat list` | one of `--video`/`--chat-id` | finite single page; `--all` rejected |
-| `live-chat stream` | one of `--video`/`--chat-id` | JSONL default, `--limit`, `--page-token`; REST polling, respects `pollingIntervalMillis`, dedupes IDs, exits when chat ends |
+| `live-chat stream` | one of `--video`/`--chat-id` | JSONL default, `--limit`, `--page-token`; REST polling, respects `pollingIntervalMillis`, suppresses unchanged messages while retaining gift updates, exits when chat ends |
 | `category list` | one of `--region`/`--id` | |
 | `language list` / `region list` | — | |
 | `login [--oauth]` | API key, or Desktop OAuth client | no flag = API key; `--oauth` = loopback PKCE analytics authorization |
@@ -62,6 +65,7 @@ commands always require OAuth.
 ```
 
 JSONL: one item object per line, no envelope. Numeric counters are strings.
+JSONL and TSV print available resume options on stderr unless `--quiet` is set.
 
 ## Exit codes
 

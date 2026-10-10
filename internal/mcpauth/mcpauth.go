@@ -1,6 +1,7 @@
 // Package mcpauth authenticates oytcd's users: Google sign-in and browser
-// sessions for the console, and the bearer tokens (console API keys and MCP
-// OAuth access tokens) that protect /mcp. It knows nothing about YouTube.
+// sessions for the console, the MCP OAuth authorization server, and the
+// bearer tokens (console API keys and MCP OAuth access tokens) that protect
+// /mcp. It knows nothing about YouTube.
 package mcpauth
 
 import (
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
 	"golang.org/x/oauth2"
 
 	"open-yt-cli/internal/oauth"
@@ -44,13 +46,20 @@ type Config struct {
 	Google        oauth.Config
 	UserInfoURL   string
 	AllowedEmails []string
-	Now           func() time.Time
+	// Resource is the canonical URL of the MCP endpoint that MCP OAuth
+	// tokens are for; empty means BaseURL + "/mcp".
+	Resource string
+	// MetadataClient fetches client ID metadata documents; nil means a
+	// client that only dials public addresses.
+	MetadataClient *http.Client
+	Now            func() time.Time
 }
 
 type Auth struct {
-	cfg   Config
-	store *store.Store
-	box   *seal.Box
+	cfg       Config
+	store     *store.Store
+	box       *seal.Box
+	documents *documents
 }
 
 func New(cfg Config, st *store.Store, box *seal.Box) *Auth {
@@ -60,17 +69,38 @@ func New(cfg Config, st *store.Store, box *seal.Box) *Auth {
 	if cfg.Google.HTTPClient == nil {
 		cfg.Google.HTTPClient = &http.Client{Timeout: 20 * time.Second}
 	}
+	if cfg.Resource == "" {
+		cfg.Resource = cfg.BaseURL + "/mcp"
+	}
+	if cfg.MetadataClient == nil {
+		cfg.MetadataClient = publicClient()
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
 	cfg.Google.Now = cfg.Now
-	return &Auth{cfg: cfg, store: st, box: box}
+	return &Auth{cfg: cfg, store: st, box: box, documents: newDocuments(cfg.MetadataClient, cfg.Now)}
 }
 
+// Register adds Google sign-in and the MCP OAuth authorization server.
 func (a *Auth) Register(mux *http.ServeMux) {
+	protect := http.NewCrossOriginProtection()
 	mux.HandleFunc("GET /auth/google", a.signIn)
 	mux.HandleFunc("GET /auth/google/callback", a.signInCallback)
-	mux.Handle("POST /auth/logout", http.NewCrossOriginProtection().Handler(http.HandlerFunc(a.logout)))
+	mux.Handle("POST /auth/logout", protect.Handler(http.HandlerFunc(a.logout)))
+
+	resource := auth.ProtectedResourceMetadataHandler(&oauthex.ProtectedResourceMetadata{
+		Resource: a.cfg.Resource, AuthorizationServers: []string{a.cfg.BaseURL},
+	})
+	mux.Handle("/.well-known/oauth-protected-resource", resource)
+	if path := a.resourcePath(); path != "" {
+		mux.Handle("/.well-known/oauth-protected-resource"+path, resource)
+	}
+	mux.HandleFunc("/.well-known/oauth-authorization-server", public(http.MethodGet, a.serverMetadata))
+	mux.HandleFunc("/register", public(http.MethodPost, a.registerClient))
+	mux.Handle("GET /authorize", a.RequireSession(http.HandlerFunc(a.authorize)))
+	mux.Handle("POST /authorize", protect.Handler(a.RequireSession(http.HandlerFunc(a.consent))))
+	mux.HandleFunc("/token", public(http.MethodPost, a.token))
 }
 
 // LoginURL is where to send a browser to sign in and come back to returnTo,
@@ -231,8 +261,7 @@ var (
 // Verifier (PKCE) to oauth.AuthorizationURL.
 func (a *Auth) StartFlow(w http.ResponseWriter, name, returnTo string) Flow {
 	flow := Flow{State: randomString(32), Verifier: randomString(32), ReturnTo: returnTo, Expires: a.cfg.Now().Add(flowTTL).Unix()}
-	data, _ := json.Marshal(flow)
-	a.setCookie(w, name, base64.RawURLEncoding.EncodeToString(a.box.Seal(data, []byte("flow:"+name))), flowTTL)
+	a.setCookie(w, name, a.sealJSON(flow, "flow:"+name), flowTTL)
 	return flow
 }
 
@@ -244,16 +273,8 @@ func (a *Auth) FinishFlow(w http.ResponseWriter, r *http.Request, name string) (
 		return Flow{}, "", ErrFlowExpired
 	}
 	a.setCookie(w, name, "", -1)
-	sealed, err := base64.RawURLEncoding.DecodeString(cookie.Value)
-	if err != nil {
-		return Flow{}, "", ErrFlowExpired
-	}
-	data, err := a.box.Open(sealed, []byte("flow:"+name))
-	if err != nil {
-		return Flow{}, "", ErrFlowExpired
-	}
 	var flow Flow
-	if err := json.Unmarshal(data, &flow); err != nil || a.cfg.Now().Unix() > flow.Expires {
+	if err := a.openJSON(cookie.Value, "flow:"+name, &flow); err != nil || a.cfg.Now().Unix() > flow.Expires {
 		return Flow{}, "", ErrFlowExpired
 	}
 	query := r.URL.Query()
@@ -274,17 +295,10 @@ func (a *Auth) FinishFlow(w http.ResponseWriter, r *http.Request, name string) (
 
 // CreateAPIKey mints a console API key. The key is returned only here; the
 // store keeps its hash.
-func (a *Auth) CreateAPIKey(ctx context.Context, userID, label string) (string, error) {
-	label = strings.TrimSpace(label)
-	if label == "" {
-		label = "API key"
-	}
-	if runes := []rune(label); len(runes) > 64 {
-		label = string(runes[:64])
-	}
+func (a *Auth) CreateAPIKey(ctx context.Context, userID, name string) (string, error) {
 	key := apiKeyPrefix + randomString(32)
 	err := a.store.CreateToken(ctx, store.Token{
-		Hash: hash(key), UserID: userID, Kind: store.KindAPIKey, Label: label, Prefix: key[:12], CreatedAt: a.cfg.Now().Unix(),
+		Hash: hash(key), UserID: userID, Kind: store.KindAPIKey, Label: label(name, "API key"), Prefix: key[:12], CreatedAt: a.cfg.Now().Unix(),
 	})
 	if err != nil {
 		return "", err
@@ -341,6 +355,38 @@ func (a *Auth) setCookie(w http.ResponseWriter, name, value string, maxAge time.
 		Name: a.cookieName(name), Value: value, Path: "/", MaxAge: seconds,
 		HttpOnly: true, Secure: a.secure(), SameSite: http.SameSiteLaxMode,
 	})
+}
+
+// sealJSON seals v for purpose as URL-safe text.
+func (a *Auth) sealJSON(v any, purpose string) string {
+	data, _ := json.Marshal(v)
+	return base64.RawURLEncoding.EncodeToString(a.box.Seal(data, []byte(purpose)))
+}
+
+// openJSON opens text from sealJSON with the same purpose into v.
+func (a *Auth) openJSON(text, purpose string, v any) error {
+	sealed, err := base64.RawURLEncoding.DecodeString(text)
+	if err != nil {
+		return err
+	}
+	data, err := a.box.Open(sealed, []byte(purpose))
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, v)
+}
+
+// label trims a user- or client-supplied name to at most 64 characters,
+// using fallback when it is empty.
+func label(name, fallback string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fallback
+	}
+	if runes := []rune(name); len(runes) > 64 {
+		return string(runes[:64])
+	}
+	return name
 }
 
 // localPath reports whether p is a path on this site. Browsers treat "//",

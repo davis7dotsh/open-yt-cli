@@ -1,0 +1,18 @@
+{{define "consent"}}{{template "head" "Authorize"}}
+<main class="wrap landing">
+<h1>Allow {{.Client}} to use oytc?</h1>
+<p class="muted">{{.Host}}</p>
+<form class="decide" method="post" action="/authorize">
+<input type="hidden" name="request" value="{{.Request}}">
+<button class="primary" type="submit" name="decision" value="allow">Allow</button>
+<button type="submit" name="decision" value="deny">Deny</button>
+</form>
+</main>
+{{template "foot"}}{{end}}
+
+{{define "authorize_error"}}{{template "head" "Authorize"}}
+<main class="wrap landing">
+<h1>This app can't connect</h1>
+<p class="muted">{{.}}</p>
+</main>
+{{template "foot"}}{{end}}

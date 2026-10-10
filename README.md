@@ -79,6 +79,12 @@ table|json|jsonl|tsv` and `--columns` cover the rest.
 `oytc <command> --help` documents every flag; validation errors explain incompatible
 combinations before any request is sent. Full reference: [docs/commands.md](docs/commands.md).
 
+## Hosted MCP server
+
+`oytcd` serves the same read-only tools as a remote MCP server: sign in to its console with
+Google, connect your channels, then point any MCP client at `https://<host>/mcp` with a console
+API key or MCP OAuth. Setup and deployment: [docs/hosted.md](docs/hosted.md).
+
 ## API key setup
 
 1. Create a Google Cloud project and enable **YouTube Data API v3**
@@ -134,6 +140,7 @@ official gRPC stream.
 - [Command reference](docs/commands.md) — every command, flag, output format, exit code
 - [Google API key setup](docs/google-api-key.md) — deterministic click-by-click guide
 - [OAuth analytics setup](docs/oauth.md) — GCP consent screen and Desktop client setup
+- [Hosted MCP server](docs/hosted.md) — oytcd console, MCP endpoint, and Railway deploy
 - [Releasing](docs/releasing.md) — release procedure and required repo settings
 - [Agent skill](skills/oytc/SKILL.md) — using `oytc` from AI agents; install it with `oytc skills install`
 

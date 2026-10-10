@@ -94,6 +94,10 @@ func (c *Client) List(ctx context.Context, resource string, params url.Values, o
 			break
 		}
 		seenTokens[result.NextPageToken] = struct{}{}
+		// The page was kept whole, so its token is a safe resume point.
+		if c.PageBudget > 0 && result.Requests >= c.PageBudget {
+			break
+		}
 		// Backstop for a server that emits distinct tokens forever, which the
 		// loop check cannot catch.
 		if result.Requests >= MaxListRequests {

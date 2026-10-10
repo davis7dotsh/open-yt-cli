@@ -77,7 +77,7 @@ func TestAnalyticsRejectsUnsupportedAllTimeSortBeforeAuth(t *testing.T) {
 	app, _, _ := testApp(nil)
 	err := execute(t, app, "analytics", "overview", "--by", "day", "--all", "--sort=-views")
 	var usage *UsageError
-	if !errors.As(err, &usage) || !strings.Contains(err.Error(), "--sort day") {
+	if !errors.As(err, &usage) || !strings.Contains(err.Error(), "sort must be day or -day") {
 		t.Fatalf("expected sort usage error before auth, got %T: %v", err, err)
 	}
 }

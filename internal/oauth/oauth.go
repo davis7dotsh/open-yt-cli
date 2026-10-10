@@ -53,6 +53,10 @@ type Config struct {
 	Now func() time.Time
 }
 
+// ErrGrantRevoked means the stored grant can no longer mint access tokens
+// (missing refresh token or invalid_grant); the user must authorize again.
+var ErrGrantRevoked = errors.New("OAuth authorization is expired or revoked")
+
 type Error struct {
 	HTTPStatus  int
 	Code        string
@@ -172,18 +176,20 @@ func Login(ctx context.Context, cfg Config) (Token, error) {
 }
 
 // AuthorizationURL builds the consent URL; verifier is the PKCE code verifier
-// whose S256 challenge is embedded.
-func AuthorizationURL(cfg Config, redirectURI, state, verifier string) string {
+// whose S256 challenge is embedded. Extra options are applied last, so they
+// can override the defaults (e.g. prompt or access_type).
+func AuthorizationURL(cfg Config, redirectURI, state, verifier string, extra ...oauth2.AuthCodeOption) string {
 	cfg = withDefaults(cfg)
 	library := cfg.library()
 	library.RedirectURL = redirectURI
-	return library.AuthCodeURL(state,
+	options := []oauth2.AuthCodeOption{
 		oauth2.AccessTypeOffline,
 		oauth2.S256ChallengeOption(verifier),
 		// Force the consent screen so Google always returns a refresh
 		// token, not only on the first authorization.
 		oauth2.SetAuthURLParam("prompt", "consent"),
-	)
+	}
+	return library.AuthCodeURL(state, append(options, extra...)...)
 }
 
 func Exchange(ctx context.Context, cfg Config, code, redirectURI, verifier string) (Token, error) {
@@ -199,7 +205,7 @@ func Exchange(ctx context.Context, cfg Config, code, redirectURI, verifier strin
 
 func Refresh(ctx context.Context, cfg Config, current Token) (Token, error) {
 	if strings.TrimSpace(current.RefreshToken) == "" {
-		return Token{}, errors.New("OAuth refresh token is missing; re-run 'oytc login --oauth'")
+		return Token{}, fmt.Errorf("%w: refresh token is missing; re-run 'oytc login --oauth'", ErrGrantRevoked)
 	}
 	cfg = withDefaults(cfg)
 	// A seed token with no access token forces TokenSource straight to the
@@ -253,8 +259,15 @@ func (s *TokenSource) AccessToken(ctx context.Context, forceRefresh bool) (strin
 	updated, err := Refresh(ctx, cfg, s.Token)
 	if err != nil {
 		var oauthErr *Error
-		if errors.As(err, &oauthErr) && (oauthErr.Code == "invalid_grant" || oauthErr.Code == "invalid_client") {
-			return "", fmt.Errorf("OAuth authorization is expired or revoked; re-run 'oytc login --oauth': %w", err)
+		if errors.As(err, &oauthErr) {
+			switch oauthErr.Code {
+			case "invalid_grant":
+				return "", fmt.Errorf("%w; re-run 'oytc login --oauth': %w", ErrGrantRevoked, err)
+			case "invalid_client":
+				// The OAuth client, not the user's grant, was rejected: a
+				// server must not treat its users' grants as revoked.
+				return "", fmt.Errorf("OAuth client was rejected; re-run 'oytc login --oauth': %w", err)
+			}
 		}
 		return "", err
 	}

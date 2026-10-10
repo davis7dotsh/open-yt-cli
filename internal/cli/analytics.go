@@ -1,30 +1,17 @@
 package cli
 
 import (
+	"context"
 	"fmt"
-	"regexp"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"open-yt-cli/internal/analytics"
 	"open-yt-cli/internal/config"
+	"open-yt-cli/internal/ops"
 	"open-yt-cli/internal/youtube"
 )
-
-var analyticsVideoIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-
-type analyticsFlags struct {
-	start      string
-	end        string
-	filters    string
-	sort       string
-	limit      int
-	pageSize   int
-	startIndex int
-	all        bool
-}
 
 func (a *App) analyticsCommand() *cobra.Command {
 	command := &cobra.Command{
@@ -42,158 +29,115 @@ func (a *App) analyticsCommand() *cobra.Command {
 }
 
 func (a *App) analyticsReportCommand() *cobra.Command {
-	var flags analyticsFlags
-	var metrics, dimensions string
+	var in ops.AnalyticsReportInput
 	cmd := &cobra.Command{
 		Use:   "report",
 		Short: "Run a raw YouTube Analytics report",
 		Args:  exactArgs(0),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			metricList := csvValues(metrics)
-			if len(metricList) == 0 {
-				return &UsageError{Message: "--metrics is required"}
-			}
-			return a.runAnalytics(cmd, flags, analytics.Query{
-				Metrics:    metricList,
-				Dimensions: csvValues(dimensions),
-			}, append(csvValues(dimensions), metricList...))
+			in.Now = a.Now
+			result, err := ops.AnalyticsReport(cmd.Context(), a.analyticsClient, in)
+			return a.renderReport(result, err, append(csvValues(in.Dimensions), csvValues(in.Metrics)...))
 		},
 	}
-	a.addAnalyticsFlags(cmd, &flags)
-	cmd.Flags().StringVar(&metrics, "metrics", "", "required comma-separated Analytics metrics")
-	cmd.Flags().StringVar(&dimensions, "dimensions", "", "comma-separated Analytics dimensions")
+	addAnalyticsFlags(cmd, &in.AnalyticsInput)
+	cmd.Flags().StringVar(&in.Metrics, "metrics", "", "required comma-separated Analytics metrics")
+	cmd.Flags().StringVar(&in.Dimensions, "dimensions", "", "comma-separated Analytics dimensions")
 	return cmd
 }
 
 func (a *App) analyticsOverviewCommand() *cobra.Command {
-	var flags analyticsFlags
-	var by string
-	// Note: thumbnail impressions and impression CTR are Studio-only; the
-	// Analytics API has no such metrics.
-	metrics := []string{"views", "engagedViews", "estimatedMinutesWatched", "averageViewDuration", "averageViewPercentage", "subscribersGained"}
+	var in ops.AnalyticsOverviewInput
 	cmd := &cobra.Command{
 		Use:   "overview",
 		Short: "Show channel views, engaged views, watch time, retention, and subscribers gained",
 		Args:  exactArgs(0),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := validateEnum("--by", by, "day", "month"); err != nil {
-				return err
-			}
-			dimensions := csvValues(by)
-			return a.runAnalytics(cmd, flags, analytics.Query{Metrics: metrics, Dimensions: dimensions}, append(dimensions, metrics...))
+			in.Now = a.Now
+			result, err := ops.AnalyticsOverview(cmd.Context(), a.analyticsClient, in)
+			return a.renderReport(result, err, append(csvValues(in.By), "views", "engagedViews", "estimatedMinutesWatched", "averageViewDuration", "averageViewPercentage", "subscribersGained"))
 		},
 	}
-	a.addAnalyticsFlags(cmd, &flags)
-	cmd.Flags().StringVar(&by, "by", "", "group by day or month")
+	addAnalyticsFlags(cmd, &in.AnalyticsInput)
+	cmd.Flags().StringVar(&in.By, "by", "", "group by day or month")
 	return cmd
 }
 
 func (a *App) analyticsVideoCommand() *cobra.Command {
-	var flags analyticsFlags
-	metrics := []string{"views", "engagedViews", "estimatedMinutesWatched", "averageViewDuration", "likes", "comments", "subscribersGained"}
+	var in ops.AnalyticsVideoInput
 	cmd := &cobra.Command{
 		Use:   "video <VIDEO_ID>",
 		Short: "Show core analytics metrics for one owned video",
 		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !analyticsVideoIDPattern.MatchString(args[0]) {
-				return &UsageError{Message: "VIDEO_ID may contain only letters, digits, underscores, and hyphens"}
-			}
-			query := analytics.Query{Metrics: metrics, Filters: "video==" + args[0]}
-			return a.runAnalytics(cmd, flags, query, metrics)
+			in.Video, in.Now = args[0], a.Now
+			result, err := ops.AnalyticsVideo(cmd.Context(), a.analyticsClient, in)
+			return a.renderReport(result, err, []string{"views", "engagedViews", "estimatedMinutesWatched", "averageViewDuration", "likes", "comments", "subscribersGained"})
 		},
 	}
-	a.addAnalyticsFlags(cmd, &flags)
+	addAnalyticsFlags(cmd, &in.AnalyticsInput)
 	return cmd
 }
 
 func (a *App) analyticsTrafficSourcesCommand() *cobra.Command {
-	var flags analyticsFlags
-	metrics := []string{"views", "estimatedMinutesWatched"}
-	dimensions := []string{"insightTrafficSourceType"}
+	var in ops.AnalyticsInput
 	cmd := &cobra.Command{
 		Use:   "traffic-sources",
 		Short: "Break views and watch time down by traffic source",
 		Args:  exactArgs(0),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.runAnalytics(cmd, flags, analytics.Query{Metrics: metrics, Dimensions: dimensions}, append(dimensions, metrics...))
+			in.Now = a.Now
+			result, err := ops.AnalyticsTrafficSources(cmd.Context(), a.analyticsClient, in)
+			return a.renderReport(result, err, []string{"insightTrafficSourceType", "views", "estimatedMinutesWatched"})
 		},
 	}
-	a.addAnalyticsFlags(cmd, &flags)
+	addAnalyticsFlags(cmd, &in)
 	return cmd
 }
 
 func (a *App) analyticsDemographicsCommand() *cobra.Command {
-	var flags analyticsFlags
-	metrics := []string{"viewerPercentage"}
-	dimensions := []string{"ageGroup", "gender"}
+	var in ops.AnalyticsInput
 	cmd := &cobra.Command{
 		Use:   "demographics",
 		Short: "Break viewer percentage down by age group and gender",
 		Args:  exactArgs(0),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.runAnalytics(cmd, flags, analytics.Query{Metrics: metrics, Dimensions: dimensions}, append(dimensions, metrics...))
+			in.Now = a.Now
+			result, err := ops.AnalyticsDemographics(cmd.Context(), a.analyticsClient, in)
+			return a.renderReport(result, err, []string{"ageGroup", "gender", "viewerPercentage"})
 		},
 	}
-	a.addAnalyticsFlags(cmd, &flags)
+	addAnalyticsFlags(cmd, &in)
 	return cmd
 }
 
-func (a *App) addAnalyticsFlags(cmd *cobra.Command, flags *analyticsFlags) {
-	now := time.Now
-	if a.Now != nil {
-		now = a.Now
-	}
-	end := now().UTC().AddDate(0, 0, -1)
-	start := end.AddDate(0, 0, -27)
-	cmd.Flags().StringVar(&flags.start, "start", start.Format(time.DateOnly), "report start date (YYYY-MM-DD; default: 28 days ending yesterday)")
-	cmd.Flags().StringVar(&flags.end, "end", end.Format(time.DateOnly), "report end date (YYYY-MM-DD; default: yesterday)")
-	cmd.Flags().StringVar(&flags.filters, "filters", "", "Analytics filter expression")
-	cmd.Flags().StringVar(&flags.sort, "sort", "", "comma-separated Analytics sort fields")
-	cmd.Flags().IntVar(&flags.pageSize, "page-size", analytics.MaxResults, fmt.Sprintf("rows per request (1-%d)", analytics.MaxResults))
-	cmd.Flags().IntVar(&flags.startIndex, "start-index", 1, "1-based index of the first report row")
-	cmd.Flags().BoolVar(&flags.all, "all", false, "fetch all report pages")
-	cmd.Flags().IntVar(&flags.limit, "limit", 0, "maximum total rows (0 = no cap; requires --all to fetch multiple pages)")
+func addAnalyticsFlags(cmd *cobra.Command, in *ops.AnalyticsInput) {
+	cmd.Flags().StringVar(&in.Start, "start", "", "report start date (YYYY-MM-DD; default: 28 days ending yesterday)")
+	cmd.Flags().StringVar(&in.End, "end", "", "report end date (YYYY-MM-DD; default: yesterday)")
+	cmd.Flags().StringVar(&in.Filters, "filters", "", "Analytics filter expression")
+	cmd.Flags().StringVar(&in.Sort, "sort", "", "comma-separated Analytics sort fields")
+	cmd.Flags().IntVar(&in.PageSize, "page-size", analytics.MaxResults, fmt.Sprintf("rows per request (1-%d)", analytics.MaxResults))
+	cmd.Flags().IntVar(&in.StartIndex, "start-index", 1, "1-based index of the first report row")
+	cmd.Flags().BoolVar(&in.All, "all", false, "fetch all report pages")
+	cmd.Flags().IntVar(&in.Limit, "limit", 0, "maximum total rows (0 = no cap; requires --all to fetch multiple pages)")
 }
 
-func (a *App) runAnalytics(cmd *cobra.Command, flags analyticsFlags, query analytics.Query, defaultColumns []string) error {
-	if err := validateAnalyticsDates(flags.start, flags.end); err != nil {
-		return err
-	}
-	if flags.limit < 0 {
-		return &UsageError{Message: "--limit must be non-negative"}
-	}
-	if flags.pageSize < 1 || flags.pageSize > analytics.MaxResults {
-		return &UsageError{Message: fmt.Sprintf("--page-size must be between 1 and %d", analytics.MaxResults)}
-	}
-	if flags.startIndex < 1 {
-		return &UsageError{Message: "--start-index must be at least 1"}
-	}
-	if flags.all {
-		timeDimension := ""
-		for _, dimension := range query.Dimensions {
-			if dimension == "day" {
-				timeDimension = "day"
-				break
-			}
-			if dimension == "month" {
-				timeDimension = "month"
-			}
-		}
-		if sortValue := strings.TrimSpace(flags.sort); timeDimension != "" && sortValue != "" && sortValue != timeDimension && sortValue != "-"+timeDimension {
-			return &UsageError{Message: fmt.Sprintf("--all with a %s dimension supports only --sort %s or --sort -%s", timeDimension, timeDimension, timeDimension)}
-		}
+// analyticsClient is the CLI's ops.AnalyticsClient. Locally there is one
+// OAuth grant, so only its channel is available.
+func (a *App) analyticsClient(_ context.Context, channel string) (*analytics.Client, error) {
+	if channel != "" {
+		return nil, &UsageError{Message: "local mode uses the channel authorized by `oytc login --oauth`; omit channel"}
 	}
 	credentials, err := config.Load()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if credentials.OAuth == nil {
-		return fmt.Errorf("%w; analytics requires OAuth", youtube.ErrMissingOAuth)
+		return nil, fmt.Errorf("%w; analytics requires OAuth", youtube.ErrMissingOAuth)
 	}
 	source, err := a.oauthTokenSource(credentials.OAuth)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	client := analytics.NewClient(source.AccessToken, a.timeout)
 	if a.AnalyticsBaseURL != "" {
@@ -202,38 +146,14 @@ func (a *App) runAnalytics(cmd *cobra.Command, flags analyticsFlags, query analy
 	if a.HTTPClient != nil {
 		client.SetHTTPClient(a.HTTPClient)
 	}
-	query.StartDate = flags.start
-	query.EndDate = flags.end
-	if query.Filters == "" {
-		query.Filters = flags.filters
-	} else if flags.filters != "" {
-		query.Filters += ";" + flags.filters
-	}
-	query.Sort = flags.sort
-	query.Limit = flags.limit
-	query.PageSize = flags.pageSize
-	query.StartIndex = flags.startIndex
-	query.All = flags.all
-	result, err := client.Report(cmd.Context(), query)
+	return client, nil
+}
+
+func (a *App) renderReport(result youtube.ListResult, err error, defaultColumns []string) error {
 	if err != nil {
 		return oauthAuthHint(err)
 	}
 	return a.renderResult(result, defaultColumns)
-}
-
-func validateAnalyticsDates(start, end string) error {
-	startDate, err := time.Parse(time.DateOnly, start)
-	if err != nil || startDate.Format(time.DateOnly) != start {
-		return &UsageError{Message: "--start must use YYYY-MM-DD"}
-	}
-	endDate, err := time.Parse(time.DateOnly, end)
-	if err != nil || endDate.Format(time.DateOnly) != end {
-		return &UsageError{Message: "--end must use YYYY-MM-DD"}
-	}
-	if startDate.After(endDate) {
-		return &UsageError{Message: "--start cannot be after --end"}
-	}
-	return nil
 }
 
 func csvValues(value string) []string {

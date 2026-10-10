@@ -1,0 +1,6 @@
+.git
+.claude
+bin
+dist
+*.db*
+.env*

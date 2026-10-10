@@ -36,7 +36,7 @@ try {
 
 Alternatively, download a zip from [releases](https://github.com/davis7dotsh/open-yt-cli/releases).
 
-From source (Go 1.26.6+): `go install ./cmd/oytc` from a clone, or `make build`.
+From source (Go 1.26.9+): `go install ./cmd/oytc` from a clone, or `make build`.
 
 ## Quick start
 
@@ -72,11 +72,18 @@ table|json|jsonl|tsv` and `--columns` cover the rest.
 | `analytics` | OAuth-only reports, overview, video, traffic-source, and demographic analytics |
 | `login` / `status` / `logout` | Manage API-key and read-only OAuth credentials |
 | `skills install` | Confirm and install the bundled agent skill to `~/.agents/skills/oytc` |
+| `mcp` | Serve the read-only tools over MCP stdio: `claude mcp add oytc -- oytc mcp` |
 | `version` | Show version, commit, and build date |
 | `update` (alias `upgrade`) | Checksum-verified self-update from GitHub Releases |
 
 `oytc <command> --help` documents every flag; validation errors explain incompatible
 combinations before any request is sent. Full reference: [docs/commands.md](docs/commands.md).
+
+## Hosted MCP server
+
+`oytcd` serves the same read-only tools as a remote MCP server: sign in to its console with
+Google, connect your channels, then point any MCP client at `https://<host>/mcp` with a console
+API key or MCP OAuth. Setup and deployment: [docs/hosted.md](docs/hosted.md).
 
 ## API key setup
 
@@ -133,6 +140,7 @@ official gRPC stream.
 - [Command reference](docs/commands.md) — every command, flag, output format, exit code
 - [Google API key setup](docs/google-api-key.md) — deterministic click-by-click guide
 - [OAuth analytics setup](docs/oauth.md) — GCP consent screen and Desktop client setup
+- [Hosted MCP server](docs/hosted.md) — oytcd console, MCP endpoint, and Railway deploy
 - [Releasing](docs/releasing.md) — release procedure and required repo settings
 - [Agent skill](skills/oytc/SKILL.md) — using `oytc` from AI agents; install it with `oytc skills install`
 

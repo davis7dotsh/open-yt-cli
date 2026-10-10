@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -158,7 +159,11 @@ func scanToken(scan func(...any) error) (Token, error) {
 }
 
 func (s *Store) CreateToken(ctx context.Context, t Token) error {
-	_, err := s.db.ExecContext(ctx, "INSERT INTO tokens ("+tokenColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+	return insertToken(ctx, s.db, t)
+}
+
+func insertToken(ctx context.Context, db execer, t Token) error {
+	_, err := db.ExecContext(ctx, "INSERT INTO tokens ("+tokenColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		t.Hash, t.UserID, t.Kind, t.Label, t.Prefix, nullString(t.ClientID), nullInt(t.ExpiresAt), nullInt(t.LastUsedAt), t.CreatedAt)
 	return err
 }
@@ -184,6 +189,148 @@ func (s *Store) APIKeys(ctx context.Context, userID string) ([]Token, error) {
 func (s *Store) DeleteAPIKey(ctx context.Context, userID, prefix string) error {
 	result, err := s.db.ExecContext(ctx, "DELETE FROM tokens WHERE user_id = ? AND kind = ? AND prefix = ?", userID, KindAPIKey, prefix)
 	return affected(result, err)
+}
+
+// --- MCP OAuth clients, authorization codes, and refresh tokens ---
+
+// OAuthClient is a dynamically registered client, or a client whose
+// metadata document (its client_id is the document's URL) was consented to.
+type OAuthClient struct {
+	ID           string
+	Name         string
+	RedirectURIs []string
+	CreatedAt    int64
+}
+
+// SaveOAuthClient adds a client, or updates an existing one's name and
+// redirect URIs.
+func (s *Store) SaveOAuthClient(ctx context.Context, c OAuthClient) error {
+	uris, err := json.Marshal(c.RedirectURIs)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO oauth_clients (client_id, name, redirect_uris, created_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT (client_id) DO UPDATE SET name = excluded.name, redirect_uris = excluded.redirect_uris`, c.ID, c.Name, string(uris), c.CreatedAt)
+	return err
+}
+
+func (s *Store) OAuthClient(ctx context.Context, clientID string) (OAuthClient, error) {
+	c := OAuthClient{ID: clientID}
+	var uris string
+	err := s.db.QueryRowContext(ctx, "SELECT name, redirect_uris, created_at FROM oauth_clients WHERE client_id = ?", clientID).Scan(&c.Name, &uris, &c.CreatedAt)
+	if err != nil {
+		return OAuthClient{}, notFound(err)
+	}
+	return c, json.Unmarshal([]byte(uris), &c.RedirectURIs)
+}
+
+type OAuthCode struct {
+	Hash        []byte
+	ClientID    string
+	UserID      string
+	RedirectURI string
+	// Challenge is the PKCE S256 code challenge.
+	Challenge string
+	ExpiresAt int64
+}
+
+func (s *Store) CreateOAuthCode(ctx context.Context, c OAuthCode) error {
+	_, err := s.db.ExecContext(ctx, "INSERT INTO oauth_codes (hash, client_id, user_id, redirect_uri, challenge, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+		c.Hash, c.ClientID, c.UserID, c.RedirectURI, c.Challenge, c.ExpiresAt)
+	return err
+}
+
+// RedeemOAuthCode deletes and returns an unexpired authorization code, so
+// each code works once.
+func (s *Store) RedeemOAuthCode(ctx context.Context, hash []byte, now int64) (OAuthCode, error) {
+	c := OAuthCode{Hash: hash}
+	err := s.db.QueryRowContext(ctx, "DELETE FROM oauth_codes WHERE hash = ? AND expires_at > ? RETURNING client_id, user_id, redirect_uri, challenge, expires_at",
+		hash, now).Scan(&c.ClientID, &c.UserID, &c.RedirectURI, &c.Challenge, &c.ExpiresAt)
+	return c, notFound(err)
+}
+
+type OAuthRefresh struct {
+	Hash      []byte
+	ClientID  string
+	UserID    string
+	ExpiresAt int64
+}
+
+// CreateOAuthGrant stores an access token together with its refresh token.
+func (s *Store) CreateOAuthGrant(ctx context.Context, access Token, refresh OAuthRefresh) error {
+	return s.inTx(ctx, func(tx *sql.Tx) error { return insertGrant(ctx, tx, access, refresh) })
+}
+
+// RotateOAuthGrant redeems the unexpired refresh token oldHash of
+// refresh.ClientID: it is deleted, and access and refresh are stored for its
+// user. It fails with ErrNotFound if the old token is unknown, expired,
+// already used, or another client's.
+func (s *Store) RotateOAuthGrant(ctx context.Context, oldHash []byte, now int64, access Token, refresh OAuthRefresh) error {
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		var userID string
+		err := tx.QueryRowContext(ctx, "DELETE FROM oauth_refresh WHERE hash = ? AND client_id = ? AND expires_at > ? RETURNING user_id",
+			oldHash, refresh.ClientID, now).Scan(&userID)
+		if err != nil {
+			return notFound(err)
+		}
+		access.UserID, refresh.UserID = userID, userID
+		return insertGrant(ctx, tx, access, refresh)
+	})
+}
+
+func insertGrant(ctx context.Context, tx *sql.Tx, access Token, refresh OAuthRefresh) error {
+	if err := insertToken(ctx, tx, access); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, "INSERT INTO oauth_refresh (hash, client_id, user_id, expires_at) VALUES (?, ?, ?, ?)",
+		refresh.Hash, refresh.ClientID, refresh.UserID, refresh.ExpiresAt)
+	return err
+}
+
+// OAuthApp is a client holding unexpired MCP OAuth tokens for a user.
+type OAuthApp struct {
+	ClientID  string
+	Name      string
+	CreatedAt int64
+	// LastUsedAt is the latest use or issue of one of its access tokens; 0
+	// once they have all been purged.
+	LastUsedAt int64
+}
+
+// OAuthApps lists the clients with an unexpired access or refresh token for
+// a user, newest first.
+func (s *Store) OAuthApps(ctx context.Context, userID string, now int64) ([]OAuthApp, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT c.client_id, c.name, c.created_at,
+		(SELECT MAX(COALESCE(t.last_used_at, t.created_at)) FROM tokens t WHERE t.user_id = ? AND t.kind = ? AND t.client_id = c.client_id)
+		FROM oauth_clients c
+		WHERE EXISTS (SELECT 1 FROM oauth_refresh r WHERE r.user_id = ? AND r.client_id = c.client_id AND r.expires_at > ?)
+		OR EXISTS (SELECT 1 FROM tokens t WHERE t.user_id = ? AND t.kind = ? AND t.client_id = c.client_id AND t.expires_at > ?)
+		ORDER BY c.created_at DESC, c.client_id`, userID, KindAccess, userID, now, userID, KindAccess, now)
+	if err != nil {
+		return nil, err
+	}
+	return collect(rows, func(rows *sql.Rows) (OAuthApp, error) {
+		var app OAuthApp
+		var lastUsed sql.NullInt64
+		err := rows.Scan(&app.ClientID, &app.Name, &app.CreatedAt, &lastUsed)
+		app.LastUsedAt = lastUsed.Int64
+		return app, err
+	})
+}
+
+// DeleteOAuthGrant revokes everything a user granted a client: access
+// tokens, refresh tokens, and unredeemed codes.
+func (s *Store) DeleteOAuthGrant(ctx context.Context, userID, clientID string) error {
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "DELETE FROM tokens WHERE user_id = ? AND client_id = ? AND kind = ?", userID, clientID, KindAccess)
+		if err == nil {
+			_, err = tx.ExecContext(ctx, "DELETE FROM oauth_refresh WHERE user_id = ? AND client_id = ?", userID, clientID)
+		}
+		if err == nil {
+			_, err = tx.ExecContext(ctx, "DELETE FROM oauth_codes WHERE user_id = ? AND client_id = ?", userID, clientID)
+		}
+		return err
+	})
 }
 
 // --- channels ---
@@ -322,6 +469,11 @@ func (s *Store) Purge(ctx context.Context, now int64) (Purged, error) {
 }
 
 // --- helpers ---
+
+// execer is a *sql.DB or *sql.Tx.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
 
 func (s *Store) inTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)

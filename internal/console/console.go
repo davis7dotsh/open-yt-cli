@@ -4,7 +4,6 @@
 package console
 
 import (
-	"bytes"
 	"embed"
 	"errors"
 	"html/template"
@@ -17,6 +16,7 @@ import (
 	"open-yt-cli/internal/oauth"
 	"open-yt-cli/internal/seal"
 	"open-yt-cli/internal/store"
+	"open-yt-cli/internal/webui"
 )
 
 type Config struct {
@@ -64,6 +64,7 @@ func (c *Console) Register(mux *http.ServeMux) {
 	mux.Handle("POST /channels/{id}/disconnect", post(c.disconnect))
 	mux.Handle("POST /keys", post(c.createKey))
 	mux.Handle("POST /keys/{prefix}/revoke", post(c.revokeKey))
+	mux.Handle("POST /apps/revoke", post(c.revokeApp))
 }
 
 func (c *Console) landing(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +80,9 @@ type consolePage struct {
 	DefaultID string
 	Channels  []store.Channel
 	Keys      []store.Token
-	MCPURL    string
+	// Apps are MCP OAuth clients holding tokens.
+	Apps   []store.OAuthApp
+	MCPURL string
 	// NewKey is a just-created API key, shown this once.
 	NewKey string
 	Error  string
@@ -94,6 +97,9 @@ func (c *Console) renderConsole(w http.ResponseWriter, r *http.Request, status i
 	}
 	if err == nil {
 		page.Keys, err = c.store.APIKeys(ctx, userID)
+	}
+	if err == nil {
+		page.Apps, err = c.store.OAuthApps(ctx, userID, c.cfg.Now().Unix())
 	}
 	if err != nil {
 		serverError(w, r, "load console", err)
@@ -121,6 +127,15 @@ func (c *Console) revokeKey(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/console", http.StatusSeeOther)
 }
 
+// revokeApp deletes everything the user granted an MCP OAuth client.
+func (c *Console) revokeApp(w http.ResponseWriter, r *http.Request) {
+	if err := c.store.DeleteOAuthGrant(r.Context(), c.userID(r), r.PostFormValue("client_id")); err != nil {
+		serverError(w, r, "revoke OAuth app", err)
+		return
+	}
+	http.Redirect(w, r, "/console", http.StatusSeeOther)
+}
+
 func (c *Console) userID(r *http.Request) string {
 	userID, _ := c.auth.CurrentUser(r)
 	return userID
@@ -129,24 +144,12 @@ func (c *Console) userID(r *http.Request) string {
 //go:embed pages/*.html
 var pageFiles embed.FS
 
-var pages = template.Must(template.New("").Funcs(template.FuncMap{
+var pages = webui.Parse(pageFiles, template.FuncMap{
 	"date": func(unix int64) string { return time.Unix(unix, 0).UTC().Format("Jan 2, 2006") },
-}).ParseFS(pageFiles, "pages/*.html"))
+}, "pages/*.html")
 
 func render(w http.ResponseWriter, status int, name string, data any) {
-	var body bytes.Buffer
-	if err := pages.ExecuteTemplate(&body, name, data); err != nil {
-		slog.Error("render page", "page", name, "err", err)
-		http.Error(w, "Something went wrong.", http.StatusInternalServerError)
-		return
-	}
-	h := w.Header()
-	h.Set("Content-Type", "text/html; charset=utf-8")
-	h.Set("Cache-Control", "no-store")
-	h.Set("Content-Security-Policy", "frame-ancestors 'none'")
-	h.Set("Referrer-Policy", "same-origin")
-	w.WriteHeader(status)
-	w.Write(body.Bytes())
+	webui.Render(w, pages, status, name, data)
 }
 
 func serverError(w http.ResponseWriter, r *http.Request, action string, err error) {

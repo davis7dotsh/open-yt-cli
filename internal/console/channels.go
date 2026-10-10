@@ -164,7 +164,6 @@ func (c *Console) Resolver(userID string) mcptools.Resolver {
 
 func (c *Console) dataClient() *youtube.Client {
 	client := youtube.NewClient(c.cfg.YouTubeAPIKey, 20*time.Second)
-	client.PageBudget = mcptools.PageBudget
 	if c.cfg.YouTubeBaseURL != "" {
 		client.BaseURL = c.cfg.YouTubeBaseURL
 	}

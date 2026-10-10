@@ -65,5 +65,5 @@ func (c *Console) Upkeep(ctx context.Context) {
 	slog.InfoContext(ctx, "upkeep",
 		"checked", checked, "revoked", revoked, "failed", failed, "deleted_channels", deleted,
 		"expired_sessions", purged.Sessions, "expired_access_tokens", purged.AccessTokens,
-		"expired_oauth_codes", purged.OAuthCodes, "expired_oauth_refresh", purged.OAuthRefresh)
+		"expired_oauth_codes", purged.OAuthCodes, "expired_oauth_refresh", purged.OAuthRefresh, "unused_oauth_clients", purged.OAuthClients)
 }

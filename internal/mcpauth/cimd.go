@@ -119,9 +119,14 @@ func publicClient() *http.Client {
 	}
 }
 
-// nonPublic adds the ranges netip has no predicate for: "this network" and
-// carrier-grade NAT.
-var nonPublic = []netip.Prefix{netip.MustParsePrefix("0.0.0.0/8"), netip.MustParsePrefix("100.64.0.0/10")}
+// nonPublic adds special-purpose ranges netip has no predicate for: "this
+// network", carrier-grade NAT, IETF protocol assignments, benchmarking,
+// reserved, NAT64, 6to4, and deprecated site-local IPv6.
+var nonPublic = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"), netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b::/96"), netip.MustParsePrefix("2002::/16"), netip.MustParsePrefix("fec0::/10"),
+}
 
 // dialPublic refuses loopback, private, link-local, multicast, and other
 // non-public addresses. It runs after DNS resolution, so a public name that
@@ -136,7 +141,7 @@ func dialPublic(_, address string, _ syscall.RawConn) error {
 		return err
 	}
 	ip = ip.Unmap()
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() ||
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() ||
 		slices.ContainsFunc(nonPublic, func(prefix netip.Prefix) bool { return prefix.Contains(ip) }) {
 		return fmt.Errorf("%s is not a public address", ip)
 	}

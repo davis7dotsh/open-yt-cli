@@ -281,3 +281,19 @@ func TestTokenSourceRefreshAndOnUpdate(t *testing.T) {
 		t.Fatalf("access/saved = %q %#v", access, saved)
 	}
 }
+
+func TestTokenSourceSeparatesRevokedGrantFromRejectedClient(t *testing.T) {
+	for code, revoked := range map[string]bool{"invalid_grant": true, "invalid_client": false} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":"`+code+`"}`)
+		}))
+		source := &TokenSource{Config: Config{ClientID: "id", TokenURL: server.URL, HTTPClient: server.Client()}, Token: Token{RefreshToken: "refresh"}}
+		_, err := source.AccessToken(context.Background(), true)
+		server.Close()
+		if errors.Is(err, ErrGrantRevoked) != revoked {
+			t.Errorf("%s: err = %v, revoked = %v", code, err, revoked)
+		}
+	}
+}

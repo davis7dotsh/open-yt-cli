@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/auth"
 
 	"open-yt-cli/internal/seal"
 	"open-yt-cli/internal/store"
@@ -43,7 +46,7 @@ func newTestServer(t *testing.T, metadataClient *http.Client) *testServer {
 	t.Cleanup(func() { st.Close() })
 	box, _ := seal.New(bytes.Repeat([]byte{1}, 32))
 	s := &testServer{t: t, mux: http.NewServeMux(), store: st, now: time.Unix(1_800_000_000, 0)}
-	s.auth = New(Config{BaseURL: testBase, MetadataClient: metadataClient, Now: func() time.Time { return s.now }}, st, box)
+	s.auth = New(Config{BaseURL: testBase, AllowedEmails: []string{"ben@example.com"}, MetadataClient: metadataClient, Now: func() time.Time { return s.now }}, st, box)
 	s.auth.Register(s.mux)
 	user, err := st.UpsertUser(ctx, "sub", "ben@example.com", s.now.Unix())
 	if err == nil {
@@ -185,7 +188,10 @@ func TestRegister(t *testing.T) {
 		{`{"redirect_uris":[]}`, "invalid_redirect_uri"},
 		{`{"redirect_uris":["http://app.example/callback"]}`, "invalid_redirect_uri"},
 		{`{"redirect_uris":["https://app.example/callback#x"]}`, "invalid_redirect_uri"},
-		{`{"redirect_uris":["cursor://callback"]}`, "invalid_redirect_uri"},
+		{`{"redirect_uris":["cursor://anysphere.cursor-mcp/oauth/callback"]}`, ""},
+		{`{"redirect_uris":["javascript://x/%0aalert(1)"]}`, "invalid_redirect_uri"},
+		{`{"redirect_uris":["https://user@app.example/callback"]}`, "invalid_redirect_uri"},
+		{`{"redirect_uris":["https://app.example/` + strings.Repeat("x", 600) + `"]}`, "invalid_redirect_uri"},
 		{`{"redirect_uris":"https://app.example/callback"}`, "invalid_client_metadata"},
 		{`not json`, "invalid_client_metadata"},
 	} {
@@ -228,10 +234,12 @@ func TestAuthorize(t *testing.T) {
 		{"https on another port", url.Values{"redirect_uri": {"https://app.example:8443/callback"}}, 400, ""},
 		{"unregistered redirect", url.Values{"redirect_uri": {"https://evil.example/callback"}}, 400, ""},
 		{"unknown client", url.Values{"client_id": {"unknown"}}, 400, ""},
-		{"wrong resource", url.Values{"resource": {"https://other.example/mcp"}}, 303, "invalid_target"},
-		{"no PKCE", url.Values{"code_challenge": {""}, "code_challenge_method": {""}}, 303, "invalid_request"},
-		{"plain PKCE", url.Values{"code_challenge_method": {"plain"}}, 303, "invalid_request"},
-		{"implicit grant", url.Values{"response_type": {"token"}}, 303, "unsupported_response_type"},
+		// Invalid requests from a verified client still get a page, never a
+		// redirect: /authorize must not be an open redirector.
+		{"wrong resource", url.Values{"resource": {"https://other.example/mcp"}}, 400, "resource must be"},
+		{"no PKCE", url.Values{"code_challenge": {""}, "code_challenge_method": {""}}, 400, "PKCE is required"},
+		{"plain PKCE", url.Values{"code_challenge_method": {"plain"}}, 400, "PKCE is required"},
+		{"implicit grant", url.Values{"response_type": {"token"}}, 400, "response_type must be code"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := s.do("GET", "/authorize?"+with(valid, tc.changes).Encode(), nil, "")
@@ -246,12 +254,10 @@ func TestAuthorize(t *testing.T) {
 				}
 			case 400:
 				if location.String() != "" {
-					t.Fatalf("redirected to unverified %q", location)
+					t.Fatalf("redirected to %q", location)
 				}
-			default:
-				query := location.Query()
-				if location.Host != "app.example" || query.Get("error") != tc.wantError || query.Get("state") != "xyz" || query.Get("iss") != testBase {
-					t.Fatalf("error redirect = %q", location)
+				if !strings.Contains(rec.Body.String(), tc.wantError) {
+					t.Fatalf("error page = %s, want %q", rec.Body, tc.wantError)
 				}
 			}
 		})
@@ -423,5 +429,51 @@ func TestDialPublic(t *testing.T) {
 		if err := dialPublic("tcp", address, nil); (err == nil) != public {
 			t.Errorf("dialPublic(%s) = %v, want public %v", address, err, public)
 		}
+	}
+}
+
+func TestRegistrationIsBounded(t *testing.T) {
+	s := newTestServer(t, nil)
+	stale := s.register("https://app.example/callback")
+	used := s.register("https://app.example/callback")
+	if err := s.store.CreateOAuthCode(context.Background(), store.OAuthCode{Hash: hash("code"), ClientID: used, UserID: s.userID, RedirectURI: "https://app.example/callback", Challenge: "c", ExpiresAt: s.now.Add(time.Hour).Unix()}); err != nil {
+		t.Fatal(err)
+	}
+	// A registration an hour later drops clients that never got a code.
+	s.now = s.now.Add(unusedClientTTL + time.Minute)
+	s.register("https://app.example/callback")
+	if _, err := s.store.OAuthClient(context.Background(), stale); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("unused client survived: %v", err)
+	}
+	if _, err := s.store.OAuthClient(context.Background(), used); err != nil {
+		t.Errorf("client holding a code was dropped: %v", err)
+	}
+	status := 0
+	for range registrationsPerMinute {
+		status = s.do("POST", "/register", strings.NewReader(`{"redirect_uris":["https://app.example/callback"]}`), "application/json").Code
+	}
+	if status != http.StatusTooManyRequests {
+		t.Errorf("registration past the limit = %d, want 429", status)
+	}
+}
+
+func TestRemovedEmailLosesAccess(t *testing.T) {
+	s := newTestServer(t, nil)
+	key, err := s.auth.CreateAPIKey(context.Background(), s.userID, "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.auth.Verify(context.Background(), key, nil); err != nil {
+		t.Fatalf("allowed key rejected: %v", err)
+	}
+	s.auth.cfg.AllowedEmails = []string{"someone@example.com"}
+	if _, err := s.auth.Verify(context.Background(), key, nil); !errors.Is(err, auth.ErrInvalidToken) {
+		t.Errorf("key of a removed email err = %v, want ErrInvalidToken", err)
+	}
+	if rec := s.do("GET", "/authorize", nil, ""); rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "/auth/google") {
+		t.Errorf("session of a removed email = %d %s, want a sign-in redirect", rec.Code, rec.Header().Get("Location"))
+	}
+	if !s.auth.allowed("SOMEONE@example.com") || s.auth.allowed("someone@exampl\u212a.com") {
+		t.Error("allowed must lowercase ASCII only")
 	}
 }

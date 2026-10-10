@@ -60,6 +60,8 @@ type Auth struct {
 	store     *store.Store
 	box       *seal.Box
 	documents *documents
+	// registrations rate limits dynamic client registration.
+	registrations window
 }
 
 func New(cfg Config, st *store.Store, box *seal.Box) *Auth {
@@ -121,13 +123,43 @@ func (a *Auth) CurrentUser(r *http.Request) (userID string, ok bool) {
 		return "", false
 	}
 	userID, err = a.store.SessionUser(r.Context(), hash(cookie.Value), a.cfg.Now().Unix())
+	if err == nil {
+		err = a.checkAllowed(r.Context(), userID)
+	}
 	if err != nil {
-		if !errors.Is(err, store.ErrNotFound) {
+		if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, errNotAllowed) {
 			slog.ErrorContext(r.Context(), "look up session", "err", err)
 		}
 		return "", false
 	}
 	return userID, true
+}
+
+var errNotAllowed = errors.New("account is no longer allowed")
+
+// checkAllowed re-checks a user against the allowlist, so removing an email
+// from OYTCD_ALLOWED_EMAILS cuts off its sessions, keys, and OAuth apps.
+func (a *Auth) checkAllowed(ctx context.Context, userID string) error {
+	user, err := a.store.User(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if !a.allowed(user.Email) {
+		return errNotAllowed
+	}
+	return nil
+}
+
+// allowed matches an email exactly against the lowercase allowlist. Google
+// emails are ASCII; Unicode case folding would let lookalikes match.
+func (a *Auth) allowed(email string) bool {
+	lower := strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + 'a' - 'A'
+		}
+		return r
+	}, email)
+	return slices.Contains(a.cfg.AllowedEmails, lower)
 }
 
 // RequireSession sends signed-out GETs to sign in and back, and rejects
@@ -181,7 +213,7 @@ func (a *Auth) signInCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Google sign-in failed. Please try again.", http.StatusBadGateway)
 		return
 	}
-	if !info.EmailVerified || !slices.ContainsFunc(a.cfg.AllowedEmails, func(allowed string) bool { return strings.EqualFold(allowed, info.Email) }) {
+	if !info.EmailVerified || !a.allowed(info.Email) {
 		http.Error(w, "This Google account is not allowed to use oytc.", http.StatusForbidden)
 		return
 	}
@@ -320,6 +352,12 @@ func (a *Auth) Verify(ctx context.Context, token string, _ *http.Request) (*auth
 	now := a.cfg.Now().Unix()
 	if row.ExpiresAt != 0 && row.ExpiresAt <= now {
 		return nil, fmt.Errorf("%w: token expired", auth.ErrInvalidToken)
+	}
+	if err := a.checkAllowed(ctx, row.UserID); errors.Is(err, errNotAllowed) || errors.Is(err, store.ErrNotFound) {
+		return nil, fmt.Errorf("%w: account not allowed", auth.ErrInvalidToken)
+	} else if err != nil {
+		slog.ErrorContext(ctx, "look up token user", "err", err)
+		return nil, errors.New("token lookup failed")
 	}
 	// Best effort, and at most once a minute so each MCP call is not a write.
 	if now-row.LastUsedAt >= 60 {

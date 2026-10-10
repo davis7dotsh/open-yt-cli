@@ -214,6 +214,19 @@ func (s *Store) SaveOAuthClient(ctx context.Context, c OAuthClient) error {
 	return err
 }
 
+// DeleteUnusedOAuthClients drops clients registered before the cutoff that
+// hold no code or token, bounding what unauthenticated registration can store.
+func (s *Store) DeleteUnusedOAuthClients(ctx context.Context, before int64) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM oauth_clients WHERE created_at < ?
+		AND NOT EXISTS (SELECT 1 FROM oauth_codes WHERE oauth_codes.client_id = oauth_clients.client_id)
+		AND NOT EXISTS (SELECT 1 FROM oauth_refresh WHERE oauth_refresh.client_id = oauth_clients.client_id)
+		AND NOT EXISTS (SELECT 1 FROM tokens WHERE tokens.client_id = oauth_clients.client_id)`, before)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func (s *Store) OAuthClient(ctx context.Context, clientID string) (OAuthClient, error) {
 	c := OAuthClient{ID: clientID}
 	var uris string
@@ -441,10 +454,11 @@ func (s *Store) DeleteRevokedChannels(ctx context.Context, checkedBefore int64) 
 // --- upkeep ---
 
 type Purged struct {
-	Sessions, AccessTokens, OAuthCodes, OAuthRefresh int64
+	Sessions, AccessTokens, OAuthCodes, OAuthRefresh, OAuthClients int64
 }
 
-// Purge deletes everything that expired at or before now.
+// Purge deletes everything that expired at or before now, then OAuth
+// clients left with no codes or tokens for a day.
 func (s *Store) Purge(ctx context.Context, now int64) (Purged, error) {
 	var p Purged
 	for _, step := range []struct {
@@ -465,7 +479,9 @@ func (s *Store) Purge(ctx context.Context, now int64) (Purged, error) {
 			return p, err
 		}
 	}
-	return p, nil
+	var err error
+	p.OAuthClients, err = s.DeleteUnusedOAuthClients(ctx, now-24*60*60)
+	return p, err
 }
 
 // --- helpers ---

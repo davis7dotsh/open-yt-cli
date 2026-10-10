@@ -8,6 +8,7 @@ package mcpauth
 // registration or a client ID metadata document.
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -23,6 +24,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"open-yt-cli/internal/store"
@@ -38,7 +40,12 @@ const (
 	accessTTL  = time.Hour
 	refreshTTL = 30 * 24 * time.Hour
 
-	maxRedirectURIs = 20
+	maxRedirectURIs   = 10
+	maxRedirectURILen = 512
+	// Registration is unauthenticated, so it is rate limited and clients
+	// that never complete an authorization are dropped after unusedClientTTL.
+	registrationsPerMinute = 30
+	unusedClientTTL        = time.Hour
 )
 
 // ResourceMetadataURL is where the protected resource metadata (RFC 9728)
@@ -80,7 +87,11 @@ func (a *Auth) registerClient(w http.ResponseWriter, r *http.Request) {
 		RedirectURIs []string `json:"redirect_uris"`
 		ClientName   string   `json:"client_name"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&metadata); err != nil {
+	if !a.registrations.allow(a.cfg.Now(), registrationsPerMinute) {
+		writeJSON(w, http.StatusTooManyRequests, &oauthError{"temporarily_unavailable", "Too many registrations. Try again in a minute."})
+		return
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&metadata); err != nil {
 		writeJSON(w, http.StatusBadRequest, &oauthError{"invalid_client_metadata", "The body must be a JSON client metadata object."})
 		return
 	}
@@ -89,8 +100,12 @@ func (a *Auth) registerClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	redirect, _ := url.Parse(metadata.RedirectURIs[0])
+	now := a.cfg.Now()
 	client := store.OAuthClient{
-		ID: randomString(16), Name: label(metadata.ClientName, redirect.Hostname()), RedirectURIs: metadata.RedirectURIs, CreatedAt: a.cfg.Now().Unix(),
+		ID: randomString(16), Name: label(metadata.ClientName, cmp.Or(redirect.Hostname(), redirect.Scheme)), RedirectURIs: metadata.RedirectURIs, CreatedAt: now.Unix(),
+	}
+	if _, err := a.store.DeleteUnusedOAuthClients(r.Context(), now.Add(-unusedClientTTL).Unix()); err != nil {
+		slog.WarnContext(r.Context(), "drop unused OAuth clients", "err", err)
 	}
 	if err := a.store.SaveOAuthClient(r.Context(), client); err != nil {
 		slog.ErrorContext(r.Context(), "register OAuth client", "err", err)
@@ -128,8 +143,9 @@ type consentPage struct {
 }
 
 // authorize asks the signed-in user to approve an authorization request.
-// An unknown client or unregistered redirect URI gets an error page; other
-// problems are reported back to the client's redirect URI.
+// Invalid requests get an error page rather than a redirect, so /authorize
+// cannot bounce a browser to a registered URI without the user's consent
+// (RFC 9700 §4.11.2).
 func (a *Auth) authorize(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	client, err := a.verifyClient(r.Context(), query.Get("client_id"), query.Get("redirect_uri"))
@@ -152,11 +168,11 @@ func (a *Auth) authorize(w http.ResponseWriter, r *http.Request) {
 		problem = &oauthError{"invalid_target", "resource must be " + a.cfg.Resource + "."}
 	}
 	if problem != nil {
-		a.redirectBack(w, r, req, url.Values{"error": {problem.Code}, "error_description": {problem.Description}})
+		render(w, http.StatusBadRequest, "authorize_error", "The app sent an invalid request: "+problem.Description)
 		return
 	}
 	redirect, _ := url.Parse(req.RedirectURI)
-	render(w, http.StatusOK, "consent", consentPage{Client: client.Name, Host: redirect.Host, Request: a.sealJSON(req, "consent")})
+	render(w, http.StatusOK, "consent", consentPage{Client: client.Name, Host: redirectHost(redirect), Request: a.sealJSON(req, "consent")})
 }
 
 // consent applies the user's decision on the consent page: an authorization
@@ -346,6 +362,9 @@ func pkceMatches(verifier, challenge string) bool {
 // metadata document rather than a registered client's ID.
 func metadataDocument(clientID string) bool { return strings.HasPrefix(clientID, "https://") }
 
+// checkRedirectURIs accepts https URIs, http on loopback, and native apps'
+// private-use schemes such as cursor:// (RFC 8252 §7.1), which must then
+// match exactly.
 func checkRedirectURIs(uris []string) error {
 	if len(uris) == 0 {
 		return errors.New("redirect_uris is required")
@@ -356,15 +375,36 @@ func checkRedirectURIs(uris []string) error {
 	for _, uri := range uris {
 		u, err := url.Parse(uri)
 		switch {
-		case err != nil || u.Host == "":
+		case len(uri) > maxRedirectURILen:
+			return fmt.Errorf("redirect URIs must be at most %d bytes", maxRedirectURILen)
+		case err != nil || !u.IsAbs():
 			return fmt.Errorf("redirect URI %q is not an absolute URL", uri)
-		case strings.Contains(uri, "#"):
-			return fmt.Errorf("redirect URI %q must not have a fragment", uri)
-		case u.Scheme != "https" && (u.Scheme != "http" || !loopback(u.Hostname())):
-			return fmt.Errorf("redirect URI %q must use https, or http on 127.0.0.1, [::1], or localhost", uri)
+		case strings.Contains(uri, "#") || u.User != nil:
+			return fmt.Errorf("redirect URI %q must not have a fragment or user info", uri)
+		case u.Scheme == "https" || (u.Scheme == "http" && loopback(u.Hostname())):
+			if u.Host == "" {
+				return fmt.Errorf("redirect URI %q has no host", uri)
+			}
+		case u.Scheme == "http" || unsafeSchemes[u.Scheme]:
+			return fmt.Errorf("redirect URI %q must use https, http on 127.0.0.1, [::1], or localhost, or an app's own scheme", uri)
 		}
 	}
 	return nil
+}
+
+// unsafeSchemes are never an app's private-use redirect scheme.
+var unsafeSchemes = map[string]bool{
+	"about": true, "blob": true, "data": true, "file": true, "ftp": true, "javascript": true,
+	"mailto": true, "sms": true, "tel": true, "vbscript": true, "ws": true, "wss": true,
+}
+
+// redirectHost names where a redirect URI sends the browser, for the
+// consent page: its host, or the scheme of a native app's URI.
+func redirectHost(u *url.URL) string {
+	if u.Host != "" {
+		return u.Host
+	}
+	return u.Scheme + ":"
 }
 
 // redirectAllowed reports whether uri is one of the registered redirect
@@ -399,6 +439,9 @@ func (e *oauthError) Error() string { return e.Code + ": " + e.Description }
 // token endpoint from any origin. None of them use cookies.
 func public(method string, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// The server sets no global read timeout (MCP calls are long), so
+		// bound these small public bodies here.
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(10 * time.Second))
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		switch r.Method {
 		case method:
@@ -412,6 +455,23 @@ func public(method string, h http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "Method not allowed.", http.StatusMethodNotAllowed)
 		}
 	}
+}
+
+// window is a fixed one-minute rate limit window.
+type window struct {
+	mu    sync.Mutex
+	start time.Time
+	count int
+}
+
+func (l *window) allow(now time.Time, max int) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if now.Sub(l.start) >= time.Minute {
+		l.start, l.count = now, 0
+	}
+	l.count++
+	return l.count <= max
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

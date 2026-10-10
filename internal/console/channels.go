@@ -229,6 +229,10 @@ func (c *Console) accessToken(ch store.Channel) youtube.TokenSource {
 			}
 			return "", &revokedError{title: ch.Title, baseURL: c.cfg.BaseURL}
 		}
+		if oauthErr := (*oauth.Error)(nil); errors.As(err, &oauthErr) && oauthErr.Code == "invalid_client" {
+			slog.ErrorContext(ctx, "Google rejected the OAuth client; check OYTCD_GOOGLE_CLIENT_ID and OYTCD_GOOGLE_CLIENT_SECRET", "err", err)
+			return "", errors.New("the server's Google OAuth client was rejected; its owner needs to fix the server configuration")
+		}
 		return token, err
 	}
 }

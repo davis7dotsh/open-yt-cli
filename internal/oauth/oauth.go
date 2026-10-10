@@ -54,8 +54,7 @@ type Config struct {
 }
 
 // ErrGrantRevoked means the stored grant can no longer mint access tokens
-// (missing refresh token, invalid_grant, or invalid_client); the user must
-// authorize again.
+// (missing refresh token or invalid_grant); the user must authorize again.
 var ErrGrantRevoked = errors.New("OAuth authorization is expired or revoked")
 
 type Error struct {
@@ -260,8 +259,15 @@ func (s *TokenSource) AccessToken(ctx context.Context, forceRefresh bool) (strin
 	updated, err := Refresh(ctx, cfg, s.Token)
 	if err != nil {
 		var oauthErr *Error
-		if errors.As(err, &oauthErr) && (oauthErr.Code == "invalid_grant" || oauthErr.Code == "invalid_client") {
-			return "", fmt.Errorf("%w; re-run 'oytc login --oauth': %w", ErrGrantRevoked, err)
+		if errors.As(err, &oauthErr) {
+			switch oauthErr.Code {
+			case "invalid_grant":
+				return "", fmt.Errorf("%w; re-run 'oytc login --oauth': %w", ErrGrantRevoked, err)
+			case "invalid_client":
+				// The OAuth client, not the user's grant, was rejected: a
+				// server must not treat its users' grants as revoked.
+				return "", fmt.Errorf("OAuth client was rejected; re-run 'oytc login --oauth': %w", err)
+			}
 		}
 		return "", err
 	}

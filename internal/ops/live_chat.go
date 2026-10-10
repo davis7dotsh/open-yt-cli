@@ -15,7 +15,7 @@ type LiveChatPageInput struct {
 	ChatID           string `json:"chatId,omitempty" jsonschema:"live chat ID (liveChatId from a previous page)"`
 	PageSize         int    `json:"pageSize,omitempty" jsonschema:"messages per request (200-2000, default 500)"`
 	PageToken        string `json:"pageToken,omitempty" jsonschema:"resume from a previous nextPageToken"`
-	Limit            int    `json:"limit,omitempty" jsonschema:"maximum messages to return; 0 means the whole page"`
+	Limit            int    `json:"limit,omitempty" jsonschema:"maximum messages to return; 0 means the whole page. A limit that drops messages also drops nextPageToken, so omit it when following the chat"`
 	ProfileImageSize int    `json:"profileImageSize,omitempty" jsonschema:"author image size in pixels (16-720, default 88)"`
 	API
 }

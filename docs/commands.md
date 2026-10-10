@@ -361,8 +361,10 @@ changes. The installed bundle contains `SKILL.md` and its `references/` files.
 Serve the read-only tools over MCP stdio: `claude mcp add oytc -- oytc mcp`.
 
 Tools mirror the read commands (`search`, `channel_get`, `analytics_overview`, …), take
-their flags as camelCase inputs, and use the CLI's credentials. `all: true` stops after
-20 requests with a resumable `nextPageToken`.
+their flags as camelCase inputs, and use the CLI's credentials. One call makes at most 20
+requests: Data API lists stop with a resumable `nextPageToken`, longer ID lists are rejected,
+and date-windowed analytics reports ask for a narrower range. `search` does not accept `all`.
+For a hosted version with a web console, see [hosted.md](hosted.md).
 
 ## Version and self-update
 

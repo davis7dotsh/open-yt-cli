@@ -51,10 +51,14 @@ func pageOptions(page Page) youtube.PageOptions {
 // is missing. Item IDs are requested for that check and stripped again unless
 // the caller's fields selected them.
 func getByIDs(ctx context.Context, client *youtube.Client, resource string, ids []string, batchSize int, params url.Values, fields string) (youtube.ListResult, error) {
+	groups := batch(ids, batchSize)
+	if client.PageBudget > 0 && len(groups) > client.PageBudget {
+		return youtube.ListResult{}, &InputError{Message: fmt.Sprintf("at most %d IDs per call", client.PageBudget*batchSize)}
+	}
 	result := youtube.ListResult{Items: make([]map[string]any, 0)}
 	requestFields, preserveID := FieldsWithRequired(fields, "items/id")
 	setValues(params, map[string]string{"fields": requestFields})
-	for _, group := range batch(ids, batchSize) {
+	for _, group := range groups {
 		params.Set("id", strings.Join(group, ","))
 		response, err := client.Get(ctx, resource, params)
 		if err != nil {

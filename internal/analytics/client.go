@@ -49,7 +49,8 @@ type Query struct {
 }
 
 type Client struct {
-	client *youtube.Client
+	client        *youtube.Client
+	requestBudget int
 }
 
 func NewClient(source youtube.TokenSource, timeout time.Duration) *Client {
@@ -65,6 +66,17 @@ func (c *Client) SetBaseURL(baseURL string) {
 
 func (c *Client) SetHTTPClient(client *http.Client) {
 	c.client.HTTPClient = client
+}
+
+// SetRequestBudget bounds the requests one Report may make. Paging by index
+// stops early with a resumable NextStartIndex; date-windowed reports, which
+// cannot resume, fail instead. Zero means no budget.
+func (c *Client) SetRequestBudget(requests int) {
+	c.requestBudget = requests
+}
+
+func (c *Client) overBudget(requests int) bool {
+	return c.requestBudget > 0 && requests >= c.requestBudget
 }
 
 func (c *Client) Report(ctx context.Context, query Query) (youtube.ListResult, error) {
@@ -159,7 +171,7 @@ func (c *Client) reportByIndex(ctx context.Context, query Query, pageSize int) (
 			result.NextStartIndex = 0
 			result.CompletionUncertain = true
 		}
-		if !query.All || (query.Limit > 0 && len(result.Items) >= query.Limit) {
+		if !query.All || (query.Limit > 0 && len(result.Items) >= query.Limit) || c.overBudget(result.Requests) {
 			break
 		}
 		if result.Requests >= MaxReportRequests {
@@ -304,6 +316,9 @@ func reportDateWindows(start, end time.Time, dimension string, reverse bool, pag
 }
 
 func (c *Client) completeTimeWindow(ctx context.Context, query Query, pageSize int, window reportWindow, dimension string, reverse bool, result *youtube.ListResult) ([]map[string]any, error) {
+	if c.overBudget(result.Requests) {
+		return nil, fmt.Errorf("analytics report needs more than %d requests; narrow the date range or set a limit", c.requestBudget)
+	}
 	if result.Requests >= MaxReportRequests {
 		return nil, fmt.Errorf("analytics pagination did not terminate after %d requests; narrow the date range or use --limit", MaxReportRequests)
 	}

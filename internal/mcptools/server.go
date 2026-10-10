@@ -8,11 +8,14 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"open-yt-cli/internal/analytics"
 	"open-yt-cli/internal/ops"
+	"open-yt-cli/internal/youtube"
 )
 
-// PageBudget caps Data API requests per tool call (youtube.Client.PageBudget)
-// so `all: true` cannot drain the daily quota; results stay resumable.
+// PageBudget caps API requests per tool call so `all: true` or a long ID list
+// cannot drain the shared daily quota. NewServer applies it to every client
+// the Resolver returns.
 const PageBudget = 20
 
 // Channel is one YouTube channel the caller has connected.
@@ -50,8 +53,28 @@ func NewServer(r Resolver, o Options) *mcp.Server {
 				return nil, channelList{Channels: channels}, err
 			})
 	}
-	registerTools(server, r)
+	registerTools(server, budgeted(r))
 	return server
+}
+
+// budgeted applies PageBudget to every client the resolver returns.
+func budgeted(r Resolver) Resolver {
+	data, reports := r.Data, r.Analytics
+	r.Data = func(ctx context.Context) (*youtube.Client, error) {
+		client, err := data(ctx)
+		if client != nil {
+			client.PageBudget = PageBudget
+		}
+		return client, err
+	}
+	r.Analytics = func(ctx context.Context, channel string) (*analytics.Client, error) {
+		client, err := reports(ctx, channel)
+		if client != nil {
+			client.SetRequestBudget(PageBudget)
+		}
+		return client, err
+	}
+	return r
 }
 
 type channelList struct {
@@ -63,8 +86,8 @@ var readOnly = &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: new(true)
 const instructions = `oytc reads public YouTube data (Data API v3) and the connected channel's analytics (YouTube Analytics API). Everything is read-only.
 
 - search draws on a 100 calls/day bucket; enumerate a channel with channel_uploads then video_get instead of searching.
-- Other reads cost about 1 unit of a shared 10,000 units/day quota; prefer batching IDs (video_get takes up to 50) over many single calls.
-- Channel references accept UC… IDs, @handles, and channel URLs.
+- Other reads cost about 1 unit of a shared 10,000 units/day quota; prefer batching IDs (video_get takes up to 50) over many single calls. One call makes at most 20 requests.
+- channel_get, channel_activities, channel_sections, and channel_uploads accept UC… IDs, @handles, and channel URLs. Every other channel input needs a UC… channel ID; resolve handles with channel_get first.
 - Counters (viewCount, likeCount, …) are strings; keep them as strings.
 - Lists return nextPageToken (Data API) or nextStartIndex (Analytics); pass it back as pageToken / startIndex to continue. If completionUncertain is true, narrow the date range or filters.
 - Use fields (Google partial-response selector) to keep large results small.`

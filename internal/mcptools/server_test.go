@@ -145,6 +145,63 @@ func TestInvalidInputIsToolError(t *testing.T) {
 	}
 }
 
+func TestToolCallsStayWithinPageBudget(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path == "/reports" {
+			rows := strings.TrimSuffix(strings.Repeat(`["US",1],`, analytics.MaxResults), ",")
+			_, _ = w.Write([]byte(`{"columnHeaders":[{"name":"country"},{"name":"views"}],"rows":[` + rows + `]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"items":[{"id":"x"}],"nextPageToken":"p` + strings.Repeat("x", requests) + `"}`))
+	}))
+	defer server.Close()
+	data := func(context.Context) (*youtube.Client, error) {
+		client := youtube.NewClient("key", time.Second)
+		client.BaseURL, client.HTTPClient, client.MaxRetries = server.URL, server.Client(), 0
+		return client, nil
+	}
+	reports := func(context.Context, string) (*analytics.Client, error) {
+		client := analytics.NewClient(func(context.Context, bool) (string, error) { return "token", nil }, time.Second)
+		client.SetBaseURL(server.URL)
+		client.SetHTTPClient(server.Client())
+		return client, nil
+	}
+	session := connect(t, Resolver{Data: data, Analytics: reports})
+	call := func(name string, arguments map[string]any) *mcp.CallToolResult {
+		t.Helper()
+		requests = 0
+		result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: arguments})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+
+	ids := make([]string, PageBudget*50+1)
+	for i := range ids {
+		ids[i] = "v"
+	}
+	for name, arguments := range map[string]map[string]any{
+		"search":    {"query": "go", "all": true},
+		"video_get": {"ids": ids},
+	} {
+		if result := call(name, arguments); !result.IsError || requests != 0 {
+			t.Errorf("%s: error = %v after %d requests, want an input error before any request", name, result.IsError, requests)
+		}
+	}
+
+	items := decode[youtube.ListResult](t, call("playlist_items", map[string]any{"playlist": "PL1", "all": true}).StructuredContent)
+	if items.Requests != PageBudget || items.NextPageToken == "" {
+		t.Errorf("playlist_items requests = %d, next = %q; want %d and a resume token", items.Requests, items.NextPageToken, PageBudget)
+	}
+	report := decode[youtube.ListResult](t, call("analytics_report", map[string]any{"metrics": "views", "dimensions": "country", "all": true}).StructuredContent)
+	if report.Requests != PageBudget || report.NextStartIndex == 0 {
+		t.Errorf("analytics_report requests = %d, nextStartIndex = %d; want %d and a resume index", report.Requests, report.NextStartIndex, PageBudget)
+	}
+}
+
 type inputSchema struct {
 	Properties map[string]any `json:"properties"`
 	Required   []string       `json:"required"`

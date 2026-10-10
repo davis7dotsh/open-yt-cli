@@ -6,6 +6,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"open-yt-cli/internal/ops"
+	"open-yt-cli/internal/youtube"
 )
 
 const analyticsChannel = " `channel` takes a connected channel ID or @handle (see list_channels when available); omit it for the default channel. Dates default to the 28 days ending yesterday (UTC)."
@@ -14,7 +15,12 @@ const analyticsChannel = " `channel` takes a connected channel ID or @handle (se
 func registerTools(server *mcp.Server, r Resolver) {
 	data, analytics := r.Data, r.Analytics
 
-	tool(server, "search", "Search public YouTube videos, channels, and playlists. Uses 1 of only 100 searches/day; prefer channel_uploads + video_get to enumerate a channel.", bind(data, ops.Search))
+	tool(server, "search", "Search public YouTube videos, channels, and playlists. Each page uses 1 of only 100 searches/day, so `all` is not supported; continue with pageToken if needed. Prefer channel_uploads + video_get to enumerate a channel.", func(ctx context.Context, in ops.SearchInput) (youtube.ListResult, error) {
+		if in.All {
+			return youtube.ListResult{}, &ops.InputError{Message: "all is not supported for search: each page spends one of 100 daily searches; continue with pageToken instead"}
+		}
+		return ops.Search(ctx, data, in)
+	})
 	tool(server, "channel_get", "Get channels by UC… ID, @handle, or channel URL: snippet, contentDetails, and statistics by default.", bind(data, ops.ChannelGet))
 	tool(server, "channel_activities", "List a channel's public activities.", bind(data, ops.ChannelActivities))
 	tool(server, "channel_sections", "List a channel's sections, or get sections by ID. Provide exactly one of channel or id.", bind(data, ops.ChannelSections))

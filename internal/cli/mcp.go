@@ -32,12 +32,12 @@ func (a *App) mcpCommand() *cobra.Command {
 	}
 }
 
-// mcpDataClient bounds `all: true` so one tool call cannot drain the quota.
+// mcpDataClient falls back to a keyless client so video_trainability works
+// without credentials; every other tool still gets ErrMissingKey from it.
 func (a *App) mcpDataClient(ctx context.Context) (*youtube.Client, error) {
 	client, err := a.dataClient(ctx)
-	if err != nil {
-		return nil, err
+	if errors.Is(err, youtube.ErrMissingKey) {
+		return a.publicClient(ctx)
 	}
-	client.PageBudget = mcptools.PageBudget
-	return client, nil
+	return client, err
 }

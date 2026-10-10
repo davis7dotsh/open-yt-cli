@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"open-yt-cli/internal/ops"
 	"open-yt-cli/internal/youtube"
 )
 
@@ -23,7 +24,7 @@ func TestPlaylistItemsAllRetainsPageTokenWithPartialFields(t *testing.T) {
 			t.Errorf("path = %q", r.URL.Path)
 		}
 		fields := r.URL.Query().Get("fields")
-		if !fieldSelectorIncludes(fields, "items/contentDetails/videoId") || !fieldSelectorIncludes(fields, "nextPageToken") {
+		if !ops.FieldSelectorIncludes(fields, "items/contentDetails/videoId") || !ops.FieldSelectorIncludes(fields, "nextPageToken") {
 			t.Errorf("fields = %q", fields)
 		}
 		switch request {
@@ -156,7 +157,7 @@ func TestLiveChatStreamPartialFieldsKeepPollingAndDedupPrivate(t *testing.T) {
 		request := requests.Add(1)
 		fields := r.URL.Query().Get("fields")
 		for _, required := range []string{"items/snippet/displayMessage", "items/id", "items/snippet/giftEventDetails/giftMetadata/comboCount", "nextPageToken", "pollingIntervalMillis", "offlineAt"} {
-			if !fieldSelectorIncludes(fields, required) {
+			if !ops.FieldSelectorIncludes(fields, required) {
 				t.Errorf("fields %q omit %q", fields, required)
 			}
 		}
@@ -210,7 +211,7 @@ func TestLiveChatStreamItemsSelectorPreservesTopLevelPollingMetadata(t *testing.
 		request := requests.Add(1)
 		fields := r.URL.Query().Get("fields")
 		for _, required := range []string{"nextPageToken", "pollingIntervalMillis", "offlineAt"} {
-			if !fieldSelectorIncludes(fields, required) {
+			if !ops.FieldSelectorIncludes(fields, required) {
 				t.Errorf("fields %q omit top-level %q", fields, required)
 			}
 		}
@@ -282,7 +283,7 @@ func TestLiveChatStreamAddsInternalPartsWithoutExposingThem(t *testing.T) {
 		}
 		fields := r.URL.Query().Get("fields")
 		for _, required := range []string{"items/authorDetails/displayName", "items/id", "items/snippet/giftEventDetails/giftMetadata/comboCount"} {
-			if !fieldSelectorIncludes(fields, required) {
+			if !ops.FieldSelectorIncludes(fields, required) {
 				t.Errorf("fields %q omit %q", fields, required)
 			}
 		}

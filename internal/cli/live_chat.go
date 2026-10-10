@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"open-yt-cli/internal/ops"
 	"open-yt-cli/internal/output"
 	"open-yt-cli/internal/youtube"
 )
@@ -23,19 +23,8 @@ func (a *App) liveChatCommand() *cobra.Command {
 	return live
 }
 
-type liveChatFlags struct {
-	videoID     string
-	chatID      string
-	pageSize    int
-	pageToken   string
-	limit       int
-	profileSize int
-	parts       string
-	fields      string
-}
-
 func (a *App) liveChatListCommand() *cobra.Command {
-	var flags liveChatFlags
+	var in ops.LiveChatPageInput
 	var all bool
 	cmd := &cobra.Command{
 		Use: "list", Short: "Fetch one finite page of live chat messages", Args: exactArgs(0),
@@ -44,32 +33,20 @@ func (a *App) liveChatListCommand() *cobra.Command {
 			if all {
 				return &UsageError{Message: "--all is not supported for live chat because its next token represents future polling; use 'live-chat stream'"}
 			}
-			client, chatID, requests, err := a.liveChatClientAndID(cmd, flags.videoID, flags.chatID)
+			page, err := ops.LiveChatPage(cmd.Context(), a.dataClient, in)
 			if err != nil {
 				return err
 			}
-			response, err := client.Get(cmd.Context(), "liveChat/messages", liveChatParams(chatID, flags))
-			if err != nil {
-				return err
-			}
-			items := response.Items
-			nextPageToken := response.NextPageToken
-			if flags.limit > 0 && len(items) > flags.limit {
-				items = items[:flags.limit]
-				// The server token points past the entire fetched page. Returning
-				// it after discarding messages would skip those messages on resume.
-				nextPageToken = ""
-			}
-			return a.renderResult(youtube.ListResult{Items: items, NextPageToken: nextPageToken, Requests: requests + 1}, liveChatColumns())
+			return a.renderResult(page.ListResult, liveChatColumns())
 		},
 	}
-	addLiveChatFlags(cmd, &flags)
+	addLiveChatFlags(cmd, &in)
 	cmd.Flags().BoolVar(&all, "all", false, "not supported for finite live chat; use stream")
 	return cmd
 }
 
 func (a *App) liveChatStreamCommand() *cobra.Command {
-	var flags liveChatFlags
+	var in ops.LiveChatPageInput
 	cmd := &cobra.Command{
 		Use: "stream", Short: "Continuously poll live chat and emit deduplicated messages", Args: exactArgs(0),
 		Long: "Continuously polls liveChatMessages.list, respects pollingIntervalMillis, carries page tokens, and deduplicates unchanged messages. Gift combo count updates are emitted. This first draft is a REST polling fallback, not the official gRPC streamList method. JSONL is the default stream format.",
@@ -81,31 +58,35 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 			if format == "json" {
 				return &UsageError{Message: "--format json is not valid for an unbounded stream; use jsonl, tsv, or table"}
 			}
-			client, chatID, requests, err := a.liveChatClientAndID(cmd, flags.videoID, flags.chatID)
-			if err != nil {
-				return err
+			// The stream limits emitted messages across pages, so each page
+			// is fetched whole.
+			limit := in.Limit
+			if limit < 0 {
+				return &UsageError{Message: "limit cannot be negative"}
 			}
+			in.Limit = 0
 			var preserveIDPart, preserveSnippetPart bool
-			flags.parts, preserveIDPart = liveChatPartsWithRequired(flags.parts, "id")
-			flags.parts, preserveSnippetPart = liveChatPartsWithRequired(flags.parts, "snippet")
-			requestFields, preserveIDField := fieldsWithRequired(flags.fields, "items/id")
-			requestFields, preserveComboCount := fieldsWithRequired(requestFields, "items/snippet/giftEventDetails/giftMetadata/comboCount")
-			flags.fields = requestFields
+			in.Parts, preserveIDPart = liveChatPartsWithRequired(in.Parts, "id")
+			in.Parts, preserveSnippetPart = liveChatPartsWithRequired(in.Parts, "snippet")
+			requestFields, preserveIDField := ops.FieldsWithRequired(in.Fields, "items/id")
+			requestFields, preserveComboCount := ops.FieldsWithRequired(requestFields, "items/snippet/giftEventDetails/giftMetadata/comboCount")
+			in.Fields = requestFields
 			preserveID := preserveIDField && (preserveIDPart || !cmd.Flags().Changed("parts"))
 			seen := newRecentIDs(liveChatDedupWindow)
 			emitted := 0
 			firstPage := true
 			for {
-				response, err := client.Get(cmd.Context(), "liveChat/messages", liveChatParams(chatID, flags))
+				page, err := ops.LiveChatPage(cmd.Context(), a.dataClient, in)
 				if err != nil {
 					if errors.Is(err, context.Canceled) || apiErrorHasReason(err, "liveChatEnded") {
 						return nil
 					}
 					return err
 				}
-				requests++
-				items := make([]map[string]any, 0, len(response.Items))
-				for _, item := range response.Items {
+				// Resolve a --video only once.
+				in.Video, in.ChatID = "", page.LiveChatID
+				items := make([]map[string]any, 0, len(page.Items))
+				for _, item := range page.Items {
 					id, _ := item["id"].(string)
 					comboCount := liveChatComboCount(item)
 					if !preserveID {
@@ -119,7 +100,7 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 						continue
 					}
 					items = append(items, item)
-					if flags.limit > 0 && emitted+len(items) >= flags.limit {
+					if limit > 0 && emitted+len(items) >= limit {
 						break
 					}
 				}
@@ -128,20 +109,20 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 					if len(columns) == 0 {
 						columns = liveChatColumns()
 					}
-					if err := output.Render(a.Out, youtube.ListResult{Items: items, Requests: requests}, output.Options{Format: format, Columns: columns, NoHeader: a.noHeader || !firstPage}); err != nil {
+					if err := output.Render(a.Out, youtube.ListResult{Items: items}, output.Options{Format: format, Columns: columns, NoHeader: a.noHeader || !firstPage}); err != nil {
 						return err
 					}
 					emitted += len(items)
 					firstPage = false
 				}
-				if flags.limit > 0 && emitted >= flags.limit {
+				if limit > 0 && emitted >= limit {
 					return nil
 				}
-				if response.OfflineAt != "" || response.NextPageToken == "" {
+				if page.OfflineAt != "" || page.NextPageToken == "" {
 					return nil
 				}
-				flags.pageToken = response.NextPageToken
-				interval := liveChatPollingInterval(response.PollingIntervalMillis)
+				in.PageToken = page.NextPageToken
+				interval := liveChatPollingInterval(page.PollingIntervalMillis)
 				if err := waitFor(cmd.Context(), interval); err != nil {
 					if errors.Is(err, context.Canceled) {
 						return nil
@@ -151,7 +132,7 @@ func (a *App) liveChatStreamCommand() *cobra.Command {
 			}
 		},
 	}
-	addLiveChatFlags(cmd, &flags)
+	addLiveChatFlags(cmd, &in)
 	return cmd
 }
 
@@ -261,67 +242,15 @@ func stripLiveChatInternalSnippet(item map[string]any, preserveSnippet, preserve
 	}
 }
 
-func addLiveChatFlags(cmd *cobra.Command, flags *liveChatFlags) {
-	cmd.Flags().StringVar(&flags.videoID, "video", "", "live video ID (resolved to activeLiveChatId)")
-	cmd.Flags().StringVar(&flags.chatID, "chat-id", "", "live chat ID")
-	cmd.Flags().IntVar(&flags.pageSize, "page-size", 500, "messages per request (200-2000)")
-	cmd.Flags().StringVar(&flags.pageToken, "page-token", "", "resume at this live chat page token")
-	cmd.Flags().IntVar(&flags.limit, "limit", 0, "stop after this many emitted messages (0 means unlimited)")
-	cmd.Flags().IntVar(&flags.profileSize, "profile-image-size", 88, "author image size in pixels (16-720)")
-	cmd.Flags().StringVar(&flags.parts, "parts", "snippet,authorDetails", "comma-separated API resource parts")
-	cmd.Flags().StringVar(&flags.fields, "fields", "", "Google partial-response fields selector")
-	cmd.PreRunE = func(_ *cobra.Command, _ []string) error {
-		if (flags.videoID == "") == (flags.chatID == "") {
-			return &UsageError{Message: "provide exactly one of --video or --chat-id"}
-		}
-		if flags.pageSize < 200 || flags.pageSize > 2000 {
-			return &UsageError{Message: "--page-size must be between 200 and 2000"}
-		}
-		if flags.profileSize < 16 || flags.profileSize > 720 {
-			return &UsageError{Message: "--profile-image-size must be between 16 and 720"}
-		}
-		if flags.limit < 0 {
-			return &UsageError{Message: "--limit cannot be negative"}
-		}
-		return nil
-	}
-}
-
-func (a *App) liveChatClientAndID(cmd *cobra.Command, videoID, chatID string) (*youtube.Client, string, int, error) {
-	client, err := a.authenticatedClient()
-	if err != nil {
-		return nil, "", 0, err
-	}
-	if chatID != "" {
-		return client, chatID, 0, nil
-	}
-	response, err := client.Get(cmd.Context(), "videos", url.Values{"part": {"liveStreamingDetails"}, "id": {videoID}})
-	if err != nil {
-		return nil, "", 1, err
-	}
-	if len(response.Items) == 0 {
-		return nil, "", 1, fmt.Errorf("video %q not found", videoID)
-	}
-	resolved, ok := mapPathString(response.Items[0], "liveStreamingDetails", "activeLiveChatId")
-	if !ok || strings.TrimSpace(resolved) == "" {
-		return nil, "", 1, fmt.Errorf("video %q has no active public live chat", videoID)
-	}
-	return client, resolved, 1, nil
-}
-
-func liveChatParams(chatID string, flags liveChatFlags) url.Values {
-	params := url.Values{
-		"part":             {flags.parts},
-		"liveChatId":       {chatID},
-		"maxResults":       {fmt.Sprint(flags.pageSize)},
-		"profileImageSize": {fmt.Sprint(flags.profileSize)},
-	}
-	fields := flags.fields
-	for _, required := range []string{"nextPageToken", "pollingIntervalMillis", "offlineAt"} {
-		fields, _ = fieldsWithRequired(fields, required)
-	}
-	setValues(params, map[string]string{"pageToken": flags.pageToken, "fields": fields})
-	return params
+func addLiveChatFlags(cmd *cobra.Command, in *ops.LiveChatPageInput) {
+	cmd.Flags().StringVar(&in.Video, "video", "", "live video ID (resolved to activeLiveChatId)")
+	cmd.Flags().StringVar(&in.ChatID, "chat-id", "", "live chat ID")
+	cmd.Flags().IntVar(&in.PageSize, "page-size", 500, "messages per request (200-2000)")
+	cmd.Flags().StringVar(&in.PageToken, "page-token", "", "resume at this live chat page token")
+	cmd.Flags().IntVar(&in.Limit, "limit", 0, "stop after this many emitted messages (0 means unlimited)")
+	cmd.Flags().IntVar(&in.ProfileImageSize, "profile-image-size", 88, "author image size in pixels (16-720)")
+	cmd.Flags().StringVar(&in.Parts, "parts", "snippet,authorDetails", "comma-separated API resource parts")
+	cmd.Flags().StringVar(&in.Fields, "fields", "", "Google partial-response fields selector")
 }
 
 func liveChatColumns() []string {

@@ -1,4 +1,4 @@
-package cli
+package ops
 
 import "testing"
 
@@ -16,8 +16,8 @@ func TestFieldSelectorIncludes(t *testing.T) {
 		{"items/snippet/resourceId/channelId", false},
 	}
 	for _, test := range tests {
-		if got := fieldSelectorIncludes(test.selector, "items/id"); got != test.want {
-			t.Errorf("fieldSelectorIncludes(%q) = %v, want %v", test.selector, got, test.want)
+		if got := FieldSelectorIncludes(test.selector, "items/id"); got != test.want {
+			t.Errorf("FieldSelectorIncludes(%q) = %v, want %v", test.selector, got, test.want)
 		}
 	}
 }
@@ -37,23 +37,23 @@ func TestFieldSelectorIncludesNestedSearchKind(t *testing.T) {
 		{"items(id/videoId,snippet/title)", false},
 	}
 	for _, test := range tests {
-		if got := fieldSelectorIncludes(test.selector, "items/id/kind"); got != test.want {
-			t.Errorf("fieldSelectorIncludes(%q) = %v, want %v", test.selector, got, test.want)
+		if got := FieldSelectorIncludes(test.selector, "items/id/kind"); got != test.want {
+			t.Errorf("FieldSelectorIncludes(%q) = %v, want %v", test.selector, got, test.want)
 		}
 	}
 }
 
 func TestFieldSelectorDistinguishesTopLevelMetadata(t *testing.T) {
 	for _, selector := range []string{"items", "items(nextPageToken)", "items/snippet/title"} {
-		if fieldSelectorIncludes(selector, "nextPageToken") {
+		if FieldSelectorIncludes(selector, "nextPageToken") {
 			t.Errorf("%q incorrectly includes top-level nextPageToken", selector)
 		}
-		fields, _ := fieldsWithRequired(selector, "nextPageToken")
-		if !fieldSelectorIncludes(fields, "nextPageToken") {
+		fields, _ := FieldsWithRequired(selector, "nextPageToken")
+		if !FieldSelectorIncludes(fields, "nextPageToken") {
 			t.Errorf("%q did not acquire top-level nextPageToken: %q", selector, fields)
 		}
 	}
-	if !fieldSelectorIncludes("items", "items/id") {
+	if !FieldSelectorIncludes("items", "items/id") {
 		t.Fatal("items should include nested item ID")
 	}
 }

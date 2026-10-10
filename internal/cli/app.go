@@ -3,11 +3,11 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -16,15 +16,16 @@ import (
 	"golang.org/x/term"
 
 	"open-yt-cli/internal/config"
+	"open-yt-cli/internal/ops"
 	"open-yt-cli/internal/output"
 	"open-yt-cli/internal/update"
 	"open-yt-cli/internal/version"
 	"open-yt-cli/internal/youtube"
 )
 
-type UsageError struct{ Message string }
-
-func (e *UsageError) Error() string { return e.Message }
+// UsageError is an invalid invocation; operations report theirs as
+// ops.InputError, so both exit with the usage code.
+type UsageError = ops.InputError
 
 type App struct {
 	In               io.Reader
@@ -55,19 +56,6 @@ type App struct {
 	noColor  bool
 	quiet    bool
 	timeout  time.Duration
-}
-
-type listFlags struct {
-	pageSize  int
-	pageToken string
-	all       bool
-	limit     int
-}
-
-type apiFlags struct {
-	parts  string
-	fields string
-	hl     string
 }
 
 func New() *App {
@@ -126,88 +114,44 @@ func (a *App) Root() *cobra.Command {
 }
 
 func (a *App) searchCommand() *cobra.Command {
-	var flags listFlags
-	var api apiFlags
-	var channelID, channelType, order, publishedAfter, publishedBefore, region, language, safeSearch, resourceType string
-	var eventType, location, locationRadius, topicID, videoCaption, videoCategory, videoDuration, videoEmbeddable, videoLicense, videoPaidProductPlacement, videoSyndicated string
+	var in ops.SearchInput
 	cmd := &cobra.Command{
 		Use:   "search [QUERY]",
 		Short: "Search public YouTube resources (1 call from the 100 calls/day search bucket)",
 		Args:  maximumArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			params := url.Values{"part": {partsOr(api.parts, "snippet")}}
 			if len(args) == 1 {
-				params.Set("q", args[0])
+				in.Query = args[0]
 			}
-			requestFields, preserveKind := fieldsWithRequired(api.fields, "items/id/kind")
-			setValues(params, map[string]string{"channelId": channelID, "channelType": channelType, "order": order, "publishedAfter": publishedAfter, "publishedBefore": publishedBefore, "regionCode": region, "relevanceLanguage": language, "safeSearch": safeSearch, "type": resourceType, "eventType": eventType, "location": location, "locationRadius": locationRadius, "topicId": topicID, "videoCaption": videoCaption, "videoCategoryId": videoCategory, "videoDuration": videoDuration, "videoEmbeddable": videoEmbeddable, "videoLicense": videoLicense, "videoPaidProductPlacement": videoPaidProductPlacement, "videoSyndicated": videoSyndicated, "fields": requestFields})
-			if err := validateEnum("--order", order, "date", "rating", "relevance", "title", "videoCount", "viewCount"); err != nil {
+			result, err := ops.Search(cmd.Context(), a.dataClient, in)
+			if err != nil {
 				return err
 			}
-			if err := validateEnum("--safe-search", safeSearch, "moderate", "none", "strict"); err != nil {
-				return err
-			}
-			if err := validateCSVEnum("--type", resourceType, "video", "channel", "playlist"); err != nil {
-				return err
-			}
-			for _, check := range []struct {
-				flag, value string
-				allowed     []string
-			}{
-				{"--channel-type", channelType, []string{"any", "show"}},
-				{"--event-type", eventType, []string{"completed", "live", "upcoming"}},
-				{"--video-caption", videoCaption, []string{"any", "closedCaption", "none"}},
-				{"--video-duration", videoDuration, []string{"any", "short", "medium", "long"}},
-				{"--video-embeddable", videoEmbeddable, []string{"any", "true"}},
-				{"--video-license", videoLicense, []string{"any", "creativeCommon", "youtube"}},
-				{"--video-paid-product-placement", videoPaidProductPlacement, []string{"any", "true"}},
-				{"--video-syndicated", videoSyndicated, []string{"any", "true"}},
-			} {
-				if err := validateEnum(check.flag, check.value, check.allowed...); err != nil {
-					return err
-				}
-			}
-			if err := validateTimestamp("--published-after", publishedAfter); err != nil {
-				return err
-			}
-			if err := validateTimestamp("--published-before", publishedBefore); err != nil {
-				return err
-			}
-			if (location == "") != (locationRadius == "") {
-				return &UsageError{Message: "--location and --location-radius must be used together"}
-			}
-			videoFilter := eventType != "" || location != "" || videoCaption != "" || videoCategory != "" || videoDuration != "" || videoEmbeddable != "" || videoLicense != "" || videoPaidProductPlacement != "" || videoSyndicated != ""
-			if videoFilter && resourceType != "video" {
-				return &UsageError{Message: "video-specific filters require --type video"}
-			}
-			if channelType != "" && resourceType != "channel" {
-				return &UsageError{Message: "--channel-type requires --type channel"}
-			}
-			return a.runFilteredList(cmd, "search", params, flags, searchResultFilter(resourceType, preserveKind), []string{"id.kind", "id.videoId", "id.channelId", "id.playlistId", "snippet.title"})
+			return a.renderResult(result, []string{"id.kind", "id.videoId", "id.channelId", "id.playlistId", "snippet.title"})
 		},
 	}
-	addListFlags(cmd, &flags, 25, 50)
-	addAPIFlags(cmd, &api, false)
-	cmd.Flags().StringVar(&channelID, "channel", "", "only resources created by this channel ID")
-	cmd.Flags().StringVar(&channelType, "channel-type", "", "any or show (requires --type channel)")
-	cmd.Flags().StringVar(&order, "order", "relevance", "date, rating, relevance, title, videoCount, or viewCount")
-	cmd.Flags().StringVar(&publishedAfter, "published-after", "", "RFC 3339 lower publication bound")
-	cmd.Flags().StringVar(&publishedBefore, "published-before", "", "RFC 3339 upper publication bound")
-	cmd.Flags().StringVar(&region, "region", "", "ISO 3166-1 alpha-2 region code")
-	cmd.Flags().StringVar(&language, "language", "", "relevance language code")
-	cmd.Flags().StringVar(&safeSearch, "safe-search", "moderate", "moderate, none, or strict")
-	cmd.Flags().StringVar(&resourceType, "type", "video,channel,playlist", "comma-separated video, channel, and/or playlist")
-	cmd.Flags().StringVar(&eventType, "event-type", "", "completed, live, or upcoming (video searches)")
-	cmd.Flags().StringVar(&location, "location", "", "latitude,longitude for a geographic video search")
-	cmd.Flags().StringVar(&locationRadius, "location-radius", "", "radius such as 5km (requires --location)")
-	cmd.Flags().StringVar(&topicID, "topic", "", "Freebase topic ID")
-	cmd.Flags().StringVar(&videoCaption, "video-caption", "", "any, closedCaption, or none")
-	cmd.Flags().StringVar(&videoCategory, "video-category", "", "video category ID")
-	cmd.Flags().StringVar(&videoDuration, "video-duration", "", "any, short, medium, or long")
-	cmd.Flags().StringVar(&videoEmbeddable, "video-embeddable", "", "any or true")
-	cmd.Flags().StringVar(&videoLicense, "video-license", "", "any, creativeCommon, or youtube")
-	cmd.Flags().StringVar(&videoPaidProductPlacement, "video-paid-product-placement", "", "any or true")
-	cmd.Flags().StringVar(&videoSyndicated, "video-syndicated", "", "any or true")
+	addPageFlags(cmd, &in.Page, 25, 50)
+	addAPIFlags(cmd, &in.API)
+	cmd.Flags().StringVar(&in.Channel, "channel", "", "only resources created by this channel ID")
+	cmd.Flags().StringVar(&in.ChannelType, "channel-type", "", "any or show (requires --type channel)")
+	cmd.Flags().StringVar(&in.Order, "order", "relevance", "date, rating, relevance, title, videoCount, or viewCount")
+	cmd.Flags().StringVar(&in.PublishedAfter, "published-after", "", "RFC 3339 lower publication bound")
+	cmd.Flags().StringVar(&in.PublishedBefore, "published-before", "", "RFC 3339 upper publication bound")
+	cmd.Flags().StringVar(&in.Region, "region", "", "ISO 3166-1 alpha-2 region code")
+	cmd.Flags().StringVar(&in.Language, "language", "", "relevance language code")
+	cmd.Flags().StringVar(&in.SafeSearch, "safe-search", "moderate", "moderate, none, or strict")
+	cmd.Flags().StringVar(&in.Type, "type", "video,channel,playlist", "comma-separated video, channel, and/or playlist")
+	cmd.Flags().StringVar(&in.EventType, "event-type", "", "completed, live, or upcoming (video searches)")
+	cmd.Flags().StringVar(&in.Location, "location", "", "latitude,longitude for a geographic video search")
+	cmd.Flags().StringVar(&in.LocationRadius, "location-radius", "", "radius such as 5km (requires --location)")
+	cmd.Flags().StringVar(&in.Topic, "topic", "", "Freebase topic ID")
+	cmd.Flags().StringVar(&in.VideoCaption, "video-caption", "", "any, closedCaption, or none")
+	cmd.Flags().StringVar(&in.VideoCategory, "video-category", "", "video category ID")
+	cmd.Flags().StringVar(&in.VideoDuration, "video-duration", "", "any, short, medium, or long")
+	cmd.Flags().StringVar(&in.VideoEmbeddable, "video-embeddable", "", "any or true")
+	cmd.Flags().StringVar(&in.VideoLicense, "video-license", "", "any, creativeCommon, or youtube")
+	cmd.Flags().StringVar(&in.VideoPaidProductPlacement, "video-paid-product-placement", "", "any or true")
+	cmd.Flags().StringVar(&in.VideoSyndicated, "video-syndicated", "", "any or true")
 	return cmd
 }
 
@@ -222,7 +166,9 @@ func (a *App) client(key string) *youtube.Client {
 	return client
 }
 
-func (a *App) authenticatedClient() (*youtube.Client, error) {
+// dataClient is the CLI's ops.DataClient: the API key, else an OAuth grant
+// that covers Data API reads.
+func (a *App) dataClient(context.Context) (*youtube.Client, error) {
 	credentials, err := config.Load()
 	if err != nil {
 		return nil, err
@@ -245,6 +191,11 @@ func (a *App) authenticatedClient() (*youtube.Client, error) {
 	return client, nil
 }
 
+// publicClient is an ops.DataClient for keyless endpoints.
+func (a *App) publicClient(context.Context) (*youtube.Client, error) {
+	return a.client(""), nil
+}
+
 func hasScope(scopes []string, scope string) bool {
 	for _, granted := range scopes {
 		if granted == scope {
@@ -252,97 +203,6 @@ func hasScope(scopes []string, scope string) bool {
 		}
 	}
 	return false
-}
-
-func (a *App) runList(cmd *cobra.Command, resource string, params url.Values, flags listFlags, defaultColumns []string) error {
-	return a.runFilteredList(cmd, resource, params, flags, nil, defaultColumns)
-}
-
-func (a *App) runFilteredList(cmd *cobra.Command, resource string, params url.Values, flags listFlags, filter func(map[string]any) bool, defaultColumns []string) error {
-	client, err := a.authenticatedClient()
-	if err != nil {
-		return err
-	}
-	result, err := client.List(cmd.Context(), resource, params, youtube.PageOptions{All: flags.all, Limit: flags.limit, PageSize: flags.pageSize, PageToken: flags.pageToken, Filter: filter})
-	if err != nil {
-		return err
-	}
-	return a.renderResult(result, defaultColumns)
-}
-
-func searchResultFilter(resourceTypes string, preserveKind bool) func(map[string]any) bool {
-	allowed := make(map[string]bool)
-	for _, resourceType := range strings.Split(resourceTypes, ",") {
-		allowed[strings.TrimSpace(resourceType)] = true
-	}
-	return func(item map[string]any) bool {
-		id, _ := item["id"].(map[string]any)
-		if kind, _ := id["kind"].(string); strings.HasPrefix(kind, "youtube#") {
-			accepted := allowed[strings.TrimPrefix(kind, "youtube#")]
-			if accepted && !preserveKind {
-				delete(id, "kind")
-				if len(id) == 0 {
-					delete(item, "id")
-				}
-			}
-			return accepted
-		}
-		return false
-	}
-}
-
-func fieldsWithRequired(fields, required string) (string, bool) {
-	if fields == "" || fieldSelectorIncludes(fields, required) {
-		return fields, true
-	}
-	return fields + "," + required, false
-}
-
-func stripItemIDs(items []map[string]any, preserve bool) {
-	if preserve {
-		return
-	}
-	for _, item := range items {
-		delete(item, "id")
-	}
-}
-
-func validateRequestedItems(resource string, requested []string, items []map[string]any) error {
-	requestedSet := make(map[string]bool, len(requested))
-	uniqueRequested := make([]string, 0, len(requested))
-	for _, id := range requested {
-		if !requestedSet[id] {
-			requestedSet[id] = true
-			uniqueRequested = append(uniqueRequested, id)
-		}
-	}
-
-	returned := make(map[string]bool, len(items))
-	for _, item := range items {
-		if id, _ := item["id"].(string); id != "" {
-			returned[id] = true
-		}
-	}
-	if len(returned) == 0 && len(items) == len(uniqueRequested) {
-		// --fields may omit IDs, so equal cardinality is the strongest check
-		// available without overriding the caller's partial-response selector.
-		return nil
-	}
-
-	missing := make([]string, 0)
-	if len(returned) > 0 {
-		for _, id := range uniqueRequested {
-			if !returned[id] {
-				missing = append(missing, id)
-			}
-		}
-	} else if len(items) < len(uniqueRequested) {
-		missing = uniqueRequested
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	return fmt.Errorf("%s not found: %s", resource, strings.Join(missing, ", "))
 }
 
 func (a *App) renderResult(result youtube.ListResult, defaultColumns []string) error {
@@ -415,39 +275,20 @@ func (a *App) stdinReader() *bufio.Reader {
 	return a.stdin
 }
 
-func addListFlags(cmd *cobra.Command, flags *listFlags, defaultSize, maxSize int) {
-	cmd.Flags().IntVar(&flags.pageSize, "page-size", defaultSize, fmt.Sprintf("results per request (1-%d)", maxSize))
-	cmd.Flags().StringVar(&flags.pageToken, "page-token", "", "start at this API page token")
-	cmd.Flags().BoolVar(&flags.all, "all", false, "fetch all available pages")
-	cmd.Flags().IntVar(&flags.limit, "limit", 0, "maximum items to emit (0 means no additional limit)")
-	cmd.PreRunE = chainPreRun(cmd.PreRunE, func(_ *cobra.Command, _ []string) error {
-		if flags.pageSize < 1 || flags.pageSize > maxSize {
-			return &UsageError{Message: fmt.Sprintf("--page-size must be between 1 and %d", maxSize)}
-		}
-		if flags.limit < 0 {
-			return &UsageError{Message: "--limit cannot be negative"}
-		}
-		return nil
-	})
+func addPageFlags(cmd *cobra.Command, page *ops.Page, defaultSize, maxSize int) {
+	cmd.Flags().IntVar(&page.PageSize, "page-size", defaultSize, fmt.Sprintf("results per request (1-%d)", maxSize))
+	cmd.Flags().StringVar(&page.PageToken, "page-token", "", "start at this API page token")
+	cmd.Flags().BoolVar(&page.All, "all", false, "fetch all available pages")
+	cmd.Flags().IntVar(&page.Limit, "limit", 0, "maximum items to emit (0 means no additional limit)")
 }
 
-func addAPIFlags(cmd *cobra.Command, flags *apiFlags, withHL bool) {
-	cmd.Flags().StringVar(&flags.parts, "parts", "", "comma-separated API resource parts")
-	cmd.Flags().StringVar(&flags.fields, "fields", "", "Google partial-response fields selector")
-	if withHL {
-		cmd.Flags().StringVar(&flags.hl, "hl", "", "localization language code")
-	}
+func addAPIFlags(cmd *cobra.Command, api *ops.API) {
+	cmd.Flags().StringVar(&api.Parts, "parts", "", "comma-separated API resource parts")
+	cmd.Flags().StringVar(&api.Fields, "fields", "", "Google partial-response fields selector")
 }
 
-func chainPreRun(first func(*cobra.Command, []string) error, second func(*cobra.Command, []string) error) func(*cobra.Command, []string) error {
-	return func(cmd *cobra.Command, args []string) error {
-		if first != nil {
-			if err := first(cmd, args); err != nil {
-				return err
-			}
-		}
-		return second(cmd, args)
-	}
+func addHLFlag(cmd *cobra.Command, hl *string) {
+	cmd.Flags().StringVar(hl, "hl", "", "localization language code")
 }
 
 func exactArgs(count int) cobra.PositionalArgs {
@@ -477,80 +318,9 @@ func maximumArgs(count int) cobra.PositionalArgs {
 	}
 }
 
-func partsOr(value, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return value
-}
-
-func setValues(values url.Values, entries map[string]string) {
-	for key, value := range entries {
-		if value != "" {
-			values.Set(key, value)
-		}
-	}
-}
-
 func valueOr(value, fallback string) string {
 	if value == "" {
 		return fallback
 	}
 	return value
-}
-
-func validateTimestamp(flag, value string) error {
-	if value == "" {
-		return nil
-	}
-	if _, err := time.Parse(time.RFC3339, value); err != nil {
-		return &UsageError{Message: fmt.Sprintf("%s must be an RFC 3339 timestamp", flag)}
-	}
-	return nil
-}
-
-func validateCSVEnum(flag, value string, allowed ...string) error {
-	for _, entry := range strings.Split(value, ",") {
-		trimmed := strings.TrimSpace(entry)
-		if trimmed == "" {
-			return &UsageError{Message: fmt.Sprintf("%s cannot contain an empty value (choose from: %s)", flag, strings.Join(allowed, ", "))}
-		}
-		if err := validateEnum(flag, trimmed, allowed...); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateEnum(flag, value string, allowed ...string) error {
-	if value == "" {
-		return nil
-	}
-	for _, candidate := range allowed {
-		if value == candidate {
-			return nil
-		}
-	}
-	return &UsageError{Message: fmt.Sprintf("%s must be one of: %s", flag, strings.Join(allowed, ", "))}
-}
-
-func validateParts(parts string, forbidden ...string) error {
-	for _, value := range strings.Split(parts, ",") {
-		for _, blocked := range forbidden {
-			if strings.TrimSpace(value) == blocked {
-				return &UsageError{Message: fmt.Sprintf("part %q requires owner/OAuth access and is not supported", blocked)}
-			}
-		}
-	}
-	return nil
-}
-
-func batch(values []string, size int) [][]string {
-	var batches [][]string
-	for len(values) > 0 {
-		count := min(size, len(values))
-		batches = append(batches, values[:count])
-		values = values[count:]
-	}
-	return batches
 }

@@ -1,4 +1,4 @@
-package cli
+package ops
 
 import "strings"
 
@@ -7,7 +7,19 @@ type fieldSelectorParser struct {
 	position int
 }
 
-func fieldSelectorIncludes(selector, target string) bool {
+// FieldsWithRequired adds required to a partial-response selector unless the
+// selector (empty means everything) already returns it. The bool reports
+// whether it did, i.e. whether required may stay in the output.
+func FieldsWithRequired(fields, required string) (string, bool) {
+	if fields == "" || FieldSelectorIncludes(fields, required) {
+		return fields, true
+	}
+	return fields + "," + required, false
+}
+
+// FieldSelectorIncludes reports whether a Google partial-response selector
+// returns the slash-separated target path.
+func FieldSelectorIncludes(selector, target string) bool {
 	parser := fieldSelectorParser{selector: selector}
 	for _, path := range parser.parseList(nil, 0) {
 		wildcardParent := strings.TrimSuffix(path, "/*")

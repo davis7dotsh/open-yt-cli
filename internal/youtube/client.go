@@ -29,6 +29,9 @@ type Client struct {
 	HTTPClient  *http.Client
 	MaxRetries  int
 	Sleep       func(context.Context, time.Duration) error
+	// PageBudget stops List after this many requests and returns the items
+	// so far with a resumable NextPageToken. Zero means no budget.
+	PageBudget int
 }
 
 type Response struct {

@@ -49,7 +49,7 @@ func exitCode(err error) int {
 	if errors.As(err, &usage) {
 		return 2
 	}
-	if errors.Is(err, youtube.ErrMissingKey) || errors.Is(err, youtube.ErrMissingOAuth) {
+	if errors.Is(err, youtube.ErrMissingKey) || errors.Is(err, youtube.ErrMissingOAuth) || errors.Is(err, oauth.ErrGrantRevoked) {
 		return 3
 	}
 	var oauthErr *oauth.Error

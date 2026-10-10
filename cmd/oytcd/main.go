@@ -1,6 +1,7 @@
 // Command oytcd is the hosted oytc server: a web console for connecting
-// YouTube channels and minting API keys, and a bearer-protected MCP endpoint
-// that exposes oytc's read-only tools for the connected channels.
+// YouTube channels and minting API keys, an MCP OAuth authorization server,
+// and a bearer-protected MCP endpoint that exposes oytc's read-only tools for
+// the connected channels.
 package main
 
 import (
@@ -139,8 +140,8 @@ func run(ctx context.Context, cfg config) error {
 	return server.Shutdown(shutdownCtx)
 }
 
-// newHandler wires every route: sign-in (mcpauth), the console (console),
-// /mcp, and /healthz.
+// newHandler wires every route: sign-in and the MCP OAuth authorization
+// server (mcpauth), the console (console), /mcp, and /healthz.
 func newHandler(cfg config, st *store.Store) (http.Handler, *console.Console, error) {
 	box, err := seal.New(cfg.SecretKey)
 	if err != nil {
@@ -152,7 +153,8 @@ func newHandler(cfg config, st *store.Store) (http.Handler, *console.Console, er
 		HTTPClient: cfg.HTTPClient,
 	}
 	authn := mcpauth.New(mcpauth.Config{
-		BaseURL: cfg.BaseURL, Google: google, UserInfoURL: cfg.GoogleUserInfoURL, AllowedEmails: cfg.AllowedEmails, Now: cfg.Now,
+		BaseURL: cfg.BaseURL, Google: google, UserInfoURL: cfg.GoogleUserInfoURL, AllowedEmails: cfg.AllowedEmails,
+		Resource: cfg.BaseURL + "/mcp", Now: cfg.Now,
 	}, st, box)
 	con := console.New(console.Config{
 		BaseURL: cfg.BaseURL, Google: google, YouTubeAPIKey: cfg.YouTubeAPIKey,
@@ -172,8 +174,8 @@ func newHandler(cfg config, st *store.Store) (http.Handler, *console.Console, er
 	bearer := auth.RequireBearerToken(authn.Verify, &auth.RequireBearerTokenOptions{
 		// API keys never expire; OAuth access tokens carry an Expiration.
 		AllowMissingExpiration: true,
-		// ResourceMetadataURL goes here once the MCP OAuth server serves
-		// /.well-known/oauth-protected-resource, so 401s point clients at it.
+		// 401s point MCP clients at OAuth discovery.
+		ResourceMetadataURL: authn.ResourceMetadataURL(),
 	})
 	mux.Handle("/mcp", bearer(mcpHandler))
 

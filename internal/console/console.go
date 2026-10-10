@@ -64,6 +64,7 @@ func (c *Console) Register(mux *http.ServeMux) {
 	mux.Handle("POST /channels/{id}/disconnect", post(c.disconnect))
 	mux.Handle("POST /keys", post(c.createKey))
 	mux.Handle("POST /keys/{prefix}/revoke", post(c.revokeKey))
+	mux.Handle("POST /apps/revoke", post(c.revokeApp))
 }
 
 func (c *Console) landing(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +80,9 @@ type consolePage struct {
 	DefaultID string
 	Channels  []store.Channel
 	Keys      []store.Token
-	MCPURL    string
+	// Apps are MCP OAuth clients holding tokens.
+	Apps   []store.OAuthApp
+	MCPURL string
 	// NewKey is a just-created API key, shown this once.
 	NewKey string
 	Error  string
@@ -94,6 +97,9 @@ func (c *Console) renderConsole(w http.ResponseWriter, r *http.Request, status i
 	}
 	if err == nil {
 		page.Keys, err = c.store.APIKeys(ctx, userID)
+	}
+	if err == nil {
+		page.Apps, err = c.store.OAuthApps(ctx, userID, c.cfg.Now().Unix())
 	}
 	if err != nil {
 		serverError(w, r, "load console", err)
@@ -116,6 +122,15 @@ func (c *Console) revokeKey(w http.ResponseWriter, r *http.Request) {
 	err := c.store.DeleteAPIKey(r.Context(), c.userID(r), r.PathValue("prefix"))
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		serverError(w, r, "revoke API key", err)
+		return
+	}
+	http.Redirect(w, r, "/console", http.StatusSeeOther)
+}
+
+// revokeApp deletes everything the user granted an MCP OAuth client.
+func (c *Console) revokeApp(w http.ResponseWriter, r *http.Request) {
+	if err := c.store.DeleteOAuthGrant(r.Context(), c.userID(r), r.PostFormValue("client_id")); err != nil {
+		serverError(w, r, "revoke OAuth app", err)
 		return
 	}
 	http.Redirect(w, r, "/console", http.StatusSeeOther)

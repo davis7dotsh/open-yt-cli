@@ -27,7 +27,7 @@
 <div class="section-head"><h2>API keys</h2></div>
 {{with .NewKey}}<div class="new-key"><code id="new-key">{{.}}</code><button class="copy" type="button" onclick="navigator.clipboard.writeText(document.getElementById('new-key').textContent).then(() => { this.textContent = 'Copied' })">Copy</button></div>{{end}}
 <form class="create" method="post" action="/keys"><input name="name" placeholder="Name" maxlength="64" autocomplete="off" aria-label="Key name"><button class="primary" type="submit">Create key</button></form>
-{{if .Keys}}<div class="scroll"><table>
+{{if or .Keys .Apps}}<div class="scroll"><table>
 <colgroup><col><col style="width: 150px"><col style="width: 120px"><col style="width: 120px"><col style="width: 90px"></colgroup>
 <thead><tr><th>Name</th><th>Key</th><th>Created</th><th>Last used</th><th></th></tr></thead>
 <tbody>{{range .Keys}}
@@ -37,6 +37,13 @@
 <td>{{date .CreatedAt}}</td>
 <td>{{if .LastUsedAt}}{{date .LastUsedAt}}{{else}}<span class="muted">Never</span>{{end}}</td>
 <td class="actions"><form method="post" action="/keys/{{.Prefix}}/revoke"><button type="submit">Revoke</button></form></td>
+</tr>{{end}}{{range .Apps}}
+<tr>
+<td title="{{.Name}}">{{.Name}}</td>
+<td class="muted">OAuth</td>
+<td>{{date .CreatedAt}}</td>
+<td>{{if .LastUsedAt}}{{date .LastUsedAt}}{{else}}<span class="muted">—</span>{{end}}</td>
+<td class="actions"><form method="post" action="/apps/revoke"><input type="hidden" name="client_id" value="{{.ClientID}}"><button type="submit">Revoke</button></form></td>
 </tr>{{end}}
 </tbody>
 </table></div>{{end}}
@@ -60,6 +67,7 @@ bearer_token_env_var = "OYTC_MCP_KEY"</code></pre>
     }
   }
 }</code></pre>
+<p class="label">claude.ai, ChatGPT<span>Add a custom connector with URL {{.MCPURL}}</span></p>
 </section>
 </main>
 {{template "foot"}}{{end}}

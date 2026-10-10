@@ -21,7 +21,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
 
 	"open-yt-cli/internal/analytics"
 	"open-yt-cli/internal/mcptools"
@@ -153,6 +155,14 @@ func TestEndToEnd(t *testing.T) {
 	if got := listChannels(t, endpoint, key); !slices.Equal(got, []mcptools.Channel{want}) {
 		t.Fatalf("list_channels = %+v", got)
 	}
+	if views := overviewViews(t, endpoint, key); views != 42.0 {
+		t.Fatalf("analytics_overview views = %v", views)
+	}
+	var found struct{ Items []map[string]any }
+	callTool(t, withToken(endpoint, key), "search", map[string]any{"query": "golang"}, &found)
+	if len(found.Items) != 1 || fmt.Sprint(found.Items[0]["id"]) != "map[kind:youtube#video videoId:vid1]" {
+		t.Fatalf("search = %v", found.Items)
+	}
 	for _, bad := range []string{"", "oytc_k_bogus"} {
 		if status := mcpStatus(t, endpoint, bad); status != http.StatusUnauthorized {
 			t.Fatalf("/mcp with key %q = %d", bad, status)
@@ -177,6 +187,121 @@ func TestEndToEnd(t *testing.T) {
 	}
 	if status := mcpStatus(t, endpoint, "oytc_at_expired"); status != http.StatusUnauthorized {
 		t.Fatalf("/mcp with expired access token = %d", status)
+	}
+
+	// MCP OAuth as claude.ai or ChatGPT does it: discovery from the 401,
+	// registration, consent in Ben's browser, and the token exchange.
+	resp, err := http.Get(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	challenge := regexp.MustCompile(`^Bearer resource_metadata="([^"]+)"$`).FindStringSubmatch(resp.Header.Get("WWW-Authenticate"))
+	if resp.StatusCode != http.StatusUnauthorized || challenge == nil {
+		t.Fatalf("unauthenticated /mcp = %d %q", resp.StatusCode, resp.Header.Get("WWW-Authenticate"))
+	}
+	var resource struct {
+		Resource             string   `json:"resource"`
+		AuthorizationServers []string `json:"authorization_servers"`
+	}
+	getJSON(t, challenge[1], &resource)
+	if resource.Resource != endpoint || !slices.Equal(resource.AuthorizationServers, []string{base}) {
+		t.Fatalf("protected resource metadata = %+v", resource)
+	}
+	var server struct {
+		AuthorizationEndpoint string `json:"authorization_endpoint"`
+		TokenEndpoint         string `json:"token_endpoint"`
+		RegistrationEndpoint  string `json:"registration_endpoint"`
+	}
+	getJSON(t, resource.AuthorizationServers[0]+"/.well-known/oauth-authorization-server", &server)
+	resp, err = http.Post(server.RegistrationEndpoint, "application/json",
+		strings.NewReader(`{"client_name":"Test Client","redirect_uris":["http://127.0.0.1/callback"],"token_endpoint_auth_method":"none"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var client struct {
+		ID string `json:"client_id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&client)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated || client.ID == "" {
+		t.Fatalf("register = %d %+v", resp.StatusCode, client)
+	}
+
+	verifier := strings.Repeat("v", 43)
+	sum := sha256.Sum256([]byte(verifier))
+	redirect, err := ben.approve(server.AuthorizationEndpoint + "?" + url.Values{
+		"response_type": {"code"}, "client_id": {client.ID}, "redirect_uri": {"http://127.0.0.1:9999/callback"}, "state": {"s1"},
+		"code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}, "code_challenge_method": {"S256"}, "resource": {endpoint},
+	}.Encode())
+	if err != nil || redirect.Host != "127.0.0.1:9999" || redirect.Query().Get("state") != "s1" || redirect.Query().Get("iss") != base {
+		t.Fatalf("authorize redirect = %v, %v", redirect, err)
+	}
+	status, tokens := postToken(t, server.TokenEndpoint, url.Values{
+		"grant_type": {"authorization_code"}, "client_id": {client.ID}, "code": {redirect.Query().Get("code")},
+		"redirect_uri": {"http://127.0.0.1:9999/callback"}, "code_verifier": {verifier}, "resource": {endpoint},
+	})
+	if status != http.StatusOK || !strings.HasPrefix(tokens.AccessToken, "oytc_a_") || !strings.HasPrefix(tokens.RefreshToken, "oytc_r_") {
+		t.Fatalf("token = %d %+v", status, tokens)
+	}
+	if got := listChannels(t, endpoint, tokens.AccessToken); !slices.Equal(got, []mcptools.Channel{want}) {
+		t.Fatalf("list_channels with OAuth = %+v", got)
+	}
+	if views := overviewViews(t, endpoint, tokens.AccessToken); views != 42.0 {
+		t.Fatalf("analytics_overview with OAuth views = %v", views)
+	}
+	refresh := func(token string) (int, tokenResponse) {
+		return postToken(t, server.TokenEndpoint, url.Values{"grant_type": {"refresh_token"}, "client_id": {client.ID}, "refresh_token": {token}})
+	}
+	status, refreshed := refresh(tokens.RefreshToken)
+	if status != http.StatusOK || refreshed.AccessToken == tokens.AccessToken {
+		t.Fatalf("refresh = %d %+v", status, refreshed)
+	}
+	if status, again := refresh(tokens.RefreshToken); status != http.StatusBadRequest || again.Error != "invalid_grant" {
+		t.Fatalf("reused refresh token = %d %+v", status, again)
+	}
+	if got := listChannels(t, endpoint, refreshed.AccessToken); len(got) != 1 {
+		t.Fatalf("list_channels after refresh = %+v", got)
+	}
+
+	// The go-sdk client finds its own way through the same flow.
+	oauthHandler, err := auth.NewAuthorizationCodeHandler(&auth.AuthorizationCodeHandlerConfig{
+		DynamicClientRegistrationConfig: &auth.DynamicClientRegistrationConfig{Metadata: &oauthex.ClientRegistrationMetadata{
+			ClientName: "SDK Client", RedirectURIs: []string{"http://127.0.0.1:7777/callback"},
+		}},
+		AuthorizationCodeFetcher: func(_ context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
+			redirect, err := ben.approve(args.URL)
+			if err != nil {
+				return nil, err
+			}
+			query := redirect.Query()
+			return &auth.AuthorizationResult{Code: query.Get("code"), State: query.Get("state"), Iss: query.Get("iss")}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sdk struct{ Channels []mcptools.Channel }
+	callTool(t, &mcp.StreamableClientTransport{Endpoint: endpoint, OAuthHandler: oauthHandler, DisableStandaloneSSE: true}, "list_channels", nil, &sdk)
+	if !slices.Equal(sdk.Channels, []mcptools.Channel{want}) {
+		t.Fatalf("list_channels with the go-sdk OAuth client = %+v", sdk.Channels)
+	}
+
+	// The console lists both apps; revoking one ends its tokens.
+	if _, _, body := ben.do("GET", "/console", nil); !strings.Contains(body, "Test Client") || !strings.Contains(body, "SDK Client") {
+		t.Fatal("console must list the OAuth apps")
+	}
+	if status, _, _ := ben.do("POST", "/apps/revoke", url.Values{"client_id": {client.ID}}); status != http.StatusSeeOther {
+		t.Fatalf("revoke app = %d", status)
+	}
+	if status := mcpStatus(t, endpoint, refreshed.AccessToken); status != http.StatusUnauthorized {
+		t.Fatalf("/mcp with a revoked app's token = %d", status)
+	}
+	if status, again := refresh(refreshed.RefreshToken); status != http.StatusBadRequest || again.Error != "invalid_grant" {
+		t.Fatalf("refresh after revoke = %d %+v", status, again)
+	}
+	if _, _, body := ben.do("GET", "/console", nil); strings.Contains(body, "Test Client") {
+		t.Fatal("console still lists the revoked app")
 	}
 	resolver := con.Resolver(rows[0].UserID)
 	report := func(channel string) error {
@@ -323,6 +448,13 @@ func newFakeGoogle(t *testing.T) *fakeGoogle {
 		}
 		io.WriteString(w, `{"items":[{"id":"UCtest","snippet":{"title":"Test Channel","customUrl":"@testchannel"}}]}`)
 	})
+	mux.HandleFunc("GET /youtube/v3/search", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Goog-Api-Key") != "yt-key" || r.URL.Query().Get("q") != "golang" {
+			http.Error(w, `{"error":{"code":400,"message":"bad request"}}`, http.StatusBadRequest)
+			return
+		}
+		io.WriteString(w, `{"items":[{"id":{"kind":"youtube#video","videoId":"vid1"},"snippet":{"title":"Go"}}]}`)
+	})
 	mux.HandleFunc("GET /analytics/v2/reports", func(w http.ResponseWriter, r *http.Request) {
 		refresh, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer access:")
 		g.mu.Lock()
@@ -448,27 +580,106 @@ func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r)
 }
 
-func listChannels(t *testing.T, endpoint, key string) []mcptools.Channel {
+// approve consents to an MCP OAuth authorization request as the browser's
+// user and returns the redirect back to the client. It reports errors
+// rather than failing the test: it also runs inside the MCP client.
+func (b *browser) approve(authorizeURL string) (*url.URL, error) {
+	resp, err := b.client.Get(authorizeURL)
+	if err != nil {
+		return nil, err
+	}
+	page, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	request := regexp.MustCompile(`name="request" value="([^"]+)"`).FindSubmatch(page)
+	if resp.StatusCode != http.StatusOK || request == nil {
+		return nil, fmt.Errorf("authorize = %d %s", resp.StatusCode, page)
+	}
+	req, _ := http.NewRequest("POST", b.base+"/authorize", strings.NewReader(url.Values{"request": {string(request[1])}, "decision": {"allow"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	if resp, err = b.client.Do(req); err != nil {
+		return nil, err
+	}
+	resp.Body.Close()
+	location, err := url.Parse(resp.Header.Get("Location"))
+	if resp.StatusCode != http.StatusSeeOther || err != nil || location.Query().Get("code") == "" {
+		return nil, fmt.Errorf("consent = %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	return location, nil
+}
+
+func getJSON(t *testing.T, target string, out any) {
+	t.Helper()
+	resp, err := http.Get(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(out); resp.StatusCode != http.StatusOK || err != nil {
+		t.Fatalf("GET %s = %d, %v", target, resp.StatusCode, err)
+	}
+}
+
+type tokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	Error        string `json:"error"`
+}
+
+func postToken(t *testing.T, endpoint string, form url.Values) (int, tokenResponse) {
+	t.Helper()
+	resp, err := http.PostForm(endpoint, form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out tokenResponse
+	json.NewDecoder(resp.Body).Decode(&out)
+	return resp.StatusCode, out
+}
+
+func withToken(endpoint, token string) *mcp.StreamableClientTransport {
+	return &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: &http.Client{Transport: bearer(token)}, DisableStandaloneSSE: true}
+}
+
+// callTool calls an MCP tool and decodes its structured result into out.
+func callTool(t *testing.T, transport mcp.Transport, name string, args, out any) {
 	t.Helper()
 	ctx := context.Background()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
-		Endpoint: endpoint, HTTPClient: &http.Client{Transport: bearer(key)}, DisableStandaloneSSE: true,
-	}, nil)
+	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer session.Close()
-	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list_channels"})
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
 	if err != nil || result.IsError {
-		t.Fatalf("list_channels = %+v, %v", result, err)
+		content, _ := json.Marshal(result)
+		t.Fatalf("%s = %s, %v", name, content, err)
 	}
 	data, _ := json.Marshal(result.StructuredContent)
-	var out struct{ Channels []mcptools.Channel }
-	if err := json.Unmarshal(data, &out); err != nil {
+	if err := json.Unmarshal(data, out); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func listChannels(t *testing.T, endpoint, token string) []mcptools.Channel {
+	t.Helper()
+	var out struct{ Channels []mcptools.Channel }
+	callTool(t, withToken(endpoint, token), "list_channels", nil, &out)
 	return out.Channels
+}
+
+// overviewViews calls analytics_overview for the test channel; the fake
+// Analytics API always reports 42 views.
+func overviewViews(t *testing.T, endpoint, token string) any {
+	t.Helper()
+	var out struct{ Items []map[string]any }
+	callTool(t, withToken(endpoint, token), "analytics_overview", map[string]any{"channel": "@testchannel"}, &out)
+	if len(out.Items) != 1 {
+		t.Fatalf("analytics_overview items = %v", out.Items)
+	}
+	return out.Items[0]["views"]
 }
 
 func mcpStatus(t *testing.T, endpoint, key string) int {

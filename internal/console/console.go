@@ -4,7 +4,6 @@
 package console
 
 import (
-	"bytes"
 	"embed"
 	"errors"
 	"html/template"
@@ -17,6 +16,7 @@ import (
 	"open-yt-cli/internal/oauth"
 	"open-yt-cli/internal/seal"
 	"open-yt-cli/internal/store"
+	"open-yt-cli/internal/webui"
 )
 
 type Config struct {
@@ -129,24 +129,12 @@ func (c *Console) userID(r *http.Request) string {
 //go:embed pages/*.html
 var pageFiles embed.FS
 
-var pages = template.Must(template.New("").Funcs(template.FuncMap{
+var pages = webui.Parse(pageFiles, template.FuncMap{
 	"date": func(unix int64) string { return time.Unix(unix, 0).UTC().Format("Jan 2, 2006") },
-}).ParseFS(pageFiles, "pages/*.html"))
+}, "pages/*.html")
 
 func render(w http.ResponseWriter, status int, name string, data any) {
-	var body bytes.Buffer
-	if err := pages.ExecuteTemplate(&body, name, data); err != nil {
-		slog.Error("render page", "page", name, "err", err)
-		http.Error(w, "Something went wrong.", http.StatusInternalServerError)
-		return
-	}
-	h := w.Header()
-	h.Set("Content-Type", "text/html; charset=utf-8")
-	h.Set("Cache-Control", "no-store")
-	h.Set("Content-Security-Policy", "frame-ancestors 'none'")
-	h.Set("Referrer-Policy", "same-origin")
-	w.WriteHeader(status)
-	w.Write(body.Bytes())
+	webui.Render(w, pages, status, name, data)
 }
 
 func serverError(w http.ResponseWriter, r *http.Request, action string, err error) {

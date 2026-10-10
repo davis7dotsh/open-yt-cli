@@ -113,3 +113,80 @@ func TestStore(t *testing.T) {
 		}
 	}
 }
+
+func TestOAuth(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "oytcd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	user, err := s.UpsertUser(ctx, "sub-1", "ben@example.com", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := OAuthClient{ID: "client", Name: "Claude", RedirectURIs: []string{"https://claude.ai/callback"}, CreatedAt: 100}
+	if err := s.SaveOAuthClient(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	client.Name, client.CreatedAt = "Claude 2", 200
+	if err := s.SaveOAuthClient(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.OAuthClient(ctx, "client"); err != nil || got.Name != "Claude 2" || got.CreatedAt != 100 || len(got.RedirectURIs) != 1 {
+		t.Fatalf("OAuthClient = %+v, %v", got, err)
+	}
+
+	code := OAuthCode{Hash: []byte("code"), ClientID: "client", UserID: user.ID, RedirectURI: "https://claude.ai/callback", Challenge: "c", ExpiresAt: 500}
+	if err := s.CreateOAuthCode(ctx, code); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.RedeemOAuthCode(ctx, []byte("code"), 499); err != nil || got.UserID != user.ID || got.Challenge != "c" {
+		t.Fatalf("RedeemOAuthCode = %+v, %v", got, err)
+	}
+	if _, err := s.RedeemOAuthCode(ctx, []byte("code"), 499); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second redeem err = %v", err)
+	}
+	code.Hash = []byte("expired")
+	if err := s.CreateOAuthCode(ctx, code); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RedeemOAuthCode(ctx, []byte("expired"), 500); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expired redeem err = %v", err)
+	}
+
+	access := func(hash string) Token {
+		return Token{Hash: []byte(hash), Kind: KindAccess, Label: "Claude", Prefix: hash, ClientID: "client", ExpiresAt: 1000, CreatedAt: 300}
+	}
+	first := access("access-1")
+	first.UserID = user.ID
+	if err := s.CreateOAuthGrant(ctx, first, OAuthRefresh{Hash: []byte("refresh-1"), ClientID: "client", UserID: user.ID, ExpiresAt: 2000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RotateOAuthGrant(ctx, []byte("refresh-1"), 300, access("x"), OAuthRefresh{Hash: []byte("x"), ClientID: "other", ExpiresAt: 2000}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("rotate as another client err = %v", err)
+	}
+	if err := s.RotateOAuthGrant(ctx, []byte("refresh-1"), 300, access("access-2"), OAuthRefresh{Hash: []byte("refresh-2"), ClientID: "client", ExpiresAt: 2000}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.TokenByHash(ctx, []byte("access-2")); err != nil || got.UserID != user.ID {
+		t.Fatalf("rotated access token = %+v, %v", got, err)
+	}
+	if err := s.RotateOAuthGrant(ctx, []byte("refresh-1"), 300, access("access-3"), OAuthRefresh{Hash: []byte("refresh-3"), ClientID: "client", ExpiresAt: 2000}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("reused refresh token err = %v", err)
+	}
+
+	if apps, err := s.OAuthApps(ctx, user.ID, 300); err != nil || len(apps) != 1 || apps[0].Name != "Claude 2" || apps[0].LastUsedAt != 300 {
+		t.Fatalf("OAuthApps = %+v, %v", apps, err)
+	}
+	if err := s.DeleteOAuthGrant(ctx, user.ID, "client"); err != nil {
+		t.Fatal(err)
+	}
+	if apps, err := s.OAuthApps(ctx, user.ID, 300); err != nil || len(apps) != 0 {
+		t.Fatalf("OAuthApps after revoke = %+v, %v", apps, err)
+	}
+	if _, err := s.TokenByHash(ctx, []byte("access-2")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("access token after revoke err = %v", err)
+	}
+}

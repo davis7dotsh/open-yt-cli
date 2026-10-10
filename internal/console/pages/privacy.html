@@ -1,0 +1,10 @@
+{{define "privacy"}}{{template "head" "Privacy"}}
+<header><div class="wrap"><a class="brand" href="/">oytc</a></div></header>
+<main class="wrap prose">
+<h1>Privacy</h1>
+<p>oytc uses YouTube API Services. Using it means agreeing to the <a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a>, and Google's handling of your data is covered by the <a href="https://policies.google.com/privacy">Google Privacy Policy</a>.</p>
+<p>oytc stores your Google account email and, for each connected channel, its ID, title, handle, and a Google refresh token. Refresh tokens are encrypted at rest. YouTube data and analytics are fetched live when requested and are never stored.</p>
+<p>Disconnecting a channel deletes its token and revokes it with Google. You can also remove oytc's access at any time in your <a href="https://security.google.com/settings/security/permissions">Google account permissions</a>.</p>
+<p>Questions go to the owner via <a href="https://www.davis7.sh">davis7.sh</a>.</p>
+</main>
+{{template "foot"}}{{end}}

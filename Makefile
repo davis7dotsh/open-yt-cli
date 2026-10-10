@@ -1,4 +1,4 @@
-.PHONY: dev build test check fmt fmt-check tidy-check cross-build package site-check release-check
+.PHONY: dev serve build test check fmt fmt-check tidy-check cross-build package site-check release-check
 
 # Forward additional make goals and ARGS to the CLI, so both
 # `make dev login` and `make dev ARGS="search cats --limit 5"` work.
@@ -11,6 +11,10 @@ dev:
 	@if [ "$(filter dev,$(MAKECMDGOALS))" = "dev" ]; then :; else \
 		echo "make: *** No rule to make target '$@'." >&2; exit 2; \
 	fi
+
+# Run the hosted server locally with settings from .env.local (see .env.example).
+serve:
+	@if [ -f .env.local ]; then set -a; . ./.env.local; set +a; fi; go run ./cmd/oytcd
 
 build:
 	go build -o bin/oytc ./cmd/oytc

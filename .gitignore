@@ -7,3 +7,7 @@
 
 # Local credentials (never commit)
 .env
+.env.local
+
+# Local oytcd databases
+*.db*

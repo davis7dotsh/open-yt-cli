@@ -1,6 +1,6 @@
 module open-yt-cli
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.8.0

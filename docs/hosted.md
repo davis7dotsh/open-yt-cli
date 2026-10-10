@@ -118,5 +118,6 @@ if you add the server without a header.
   revoked for 30 days, and purges expired sessions, codes, and tokens.
 - Disconnecting a channel revokes its Google grant. Revoked or expired grants show in the console
   and in tool errors with a reconnect link.
-- Quota is the Google project's: 10,000 units/day plus 100 searches/day. MCP list calls stop after
-  20 pages and return a `nextPageToken`.
+- Quota is the Google project's: 10,000 units/day, plus a separate bucket of 100 `search.list`
+  calls/day (YouTube's pricing since June 2026). One MCP tool call makes at most 20 requests; list
+  calls stop there and return a `nextPageToken`.

@@ -192,6 +192,14 @@ func TestToolCallsStayWithinPageBudget(t *testing.T) {
 		}
 	}
 
+	handles := make([]string, PageBudget+5)
+	for i := range handles {
+		handles[i] = "@h"
+	}
+	if result := call("channel_get", map[string]any{"refs": handles}); !result.IsError || requests > PageBudget {
+		t.Errorf("channel_get with %d handles: error = %v after %d requests, want an error within %d", len(handles), result.IsError, requests, PageBudget)
+	}
+
 	items := decode[youtube.ListResult](t, call("playlist_items", map[string]any{"playlist": "PL1", "all": true}).StructuredContent)
 	if items.Requests != PageBudget || items.NextPageToken == "" {
 		t.Errorf("playlist_items requests = %d, next = %q; want %d and a resume token", items.Requests, items.NextPageToken, PageBudget)

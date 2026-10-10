@@ -29,13 +29,22 @@ func ChannelGet(ctx context.Context, data DataClient, in ChannelGetInput) (youtu
 	}
 	ids := make([]string, 0, len(in.Refs))
 	requests := 0
+	// Handles and URLs cost a request each to resolve; they count against
+	// the page budget along with the batched lookups that follow.
+	overBudget := func() bool { return client.PageBudget > 0 && requests+(len(in.Refs)+49)/50 > client.PageBudget }
 	for _, reference := range in.Refs {
+		if overBudget() {
+			return youtube.ListResult{}, &InputError{Message: fmt.Sprintf("too many handles or URLs to resolve in one call (at most %d requests); pass UC… channel IDs or split the call", client.PageBudget)}
+		}
 		id, used, err := client.ResolveChannel(ctx, reference)
 		requests += used
 		if err != nil {
 			return youtube.ListResult{}, err
 		}
 		ids = append(ids, id)
+	}
+	if overBudget() {
+		return youtube.ListResult{}, &InputError{Message: fmt.Sprintf("too many handles or URLs to resolve in one call (at most %d requests); pass UC… channel IDs or split the call", client.PageBudget)}
 	}
 	params := url.Values{"part": {parts}}
 	setValues(params, map[string]string{"hl": in.HL})

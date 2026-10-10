@@ -21,6 +21,7 @@ Help output is always authoritative: run `oytc --help`, `oytc <command> --help`,
 - [Live chat](#live-chat)
 - [Metadata lists](#metadata-lists)
 - [Agent skill installation](#agent-skill-installation)
+- [MCP server](#mcp-server)
 - [Version and self-update](#version-and-self-update)
 - [Output](#output)
 - [Pagination and quota](#pagination-and-quota)
@@ -75,6 +76,7 @@ oytc language list
 oytc region list
 
 oytc skills install                              # `oytc skill install` also works
+oytc mcp
 oytc version
 oytc update [--check] [--version vX.Y.Z]     # `oytc upgrade` is an alias
 ```
@@ -353,6 +355,14 @@ write permission it needs, then waits for an explicit `y`/`yes` confirmation. On
 it atomically installs the skill bundled with that CLI release to
 `~/.agents/skills/oytc`, replacing an older installation. Declining makes no filesystem
 changes. The installed bundle contains `SKILL.md` and its `references/` files.
+
+## MCP server
+
+Serve the read-only tools over MCP stdio: `claude mcp add oytc -- oytc mcp`.
+
+Tools mirror the read commands (`search`, `channel_get`, `analytics_overview`, …), take
+their flags as camelCase inputs, and use the CLI's credentials. `all: true` stops after
+20 requests with a resumable `nextPageToken`.
 
 ## Version and self-update
 

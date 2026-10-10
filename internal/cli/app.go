@@ -109,7 +109,7 @@ func (a *App) Root() *cobra.Command {
 	root.AddCommand(a.subscriptionCommand())
 	root.AddCommand(a.liveChatCommand())
 	root.AddCommand(a.categoryCommand(), a.languageCommand(), a.regionCommand())
-	root.AddCommand(a.versionCommand(), a.updateCommand(), a.skillsCommand())
+	root.AddCommand(a.versionCommand(), a.updateCommand(), a.skillsCommand(), a.mcpCommand())
 	return root
 }
 

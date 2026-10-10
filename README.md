@@ -72,6 +72,7 @@ table|json|jsonl|tsv` and `--columns` cover the rest.
 | `analytics` | OAuth-only reports, overview, video, traffic-source, and demographic analytics |
 | `login` / `status` / `logout` | Manage API-key and read-only OAuth credentials |
 | `skills install` | Confirm and install the bundled agent skill to `~/.agents/skills/oytc` |
+| `mcp` | Serve the read-only tools over MCP stdio: `claude mcp add oytc -- oytc mcp` |
 | `version` | Show version, commit, and build date |
 | `update` (alias `upgrade`) | Checksum-verified self-update from GitHub Releases |
 

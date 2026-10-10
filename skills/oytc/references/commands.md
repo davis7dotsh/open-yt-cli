@@ -55,6 +55,7 @@ for other reports, check `completionUncertain` before treating a result as compl
 | `status [--check]` | — | shows both credential types; local-only unless `--check` |
 | `logout` | — | best-effort OAuth revoke, then removes stored credentials |
 | `skills install` | confirmation | installs this bundled skill to `~/.agents/skills/oytc` |
+| `mcp` | — | serves the read commands as MCP tools over stdio (`claude mcp add oytc -- oytc mcp`) |
 | `version` | — | version/commit/date/platform |
 | `update [--check] [--version vX.Y.Z]` | — | self-update; alias `upgrade` |
 

@@ -11,6 +11,10 @@ import (
 	"open-yt-cli/internal/ops"
 )
 
+// PageBudget caps Data API requests per tool call (youtube.Client.PageBudget)
+// so `all: true` cannot drain the daily quota; results stay resumable.
+const PageBudget = 20
+
 // Channel is one YouTube channel the caller has connected.
 type Channel struct {
 	ID      string `json:"id"`

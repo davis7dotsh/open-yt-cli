@@ -1,4 +1,4 @@
-# Build from the repo root: docker build -f cmd/oytcd/Dockerfile .
+# oytcd, the hosted MCP server. Railway builds this root Dockerfile automatically.
 FROM golang:1.26 AS build
 WORKDIR /src
 COPY go.mod go.sum ./

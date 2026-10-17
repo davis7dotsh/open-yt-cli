@@ -47,15 +47,6 @@ oytc comment threads --video VIDEO_ID --order relevance --all --limit 500 --form
 
 Replies beyond the inlined ones: `oytc comment replies TOP_LEVEL_COMMENT_ID`.
 
-## Sample a live stream's chat
-
-```sh
-oytc live-chat stream --video LIVE_VIDEO_ID --limit 200 --format jsonl
-```
-
-Bounded by `--limit`; exits on its own when the chat ends. This is REST polling (documented
-fallback), so expect `pollingIntervalMillis`-paced batches, not per-message latency.
-
 ## Analyze your authorized channel (OAuth)
 
 Authorize once, then request normalized JSON rows:

@@ -32,14 +32,12 @@ type Client struct {
 }
 
 type Response struct {
-	Items                 []map[string]any `json:"items"`
-	NextPageToken         string           `json:"nextPageToken,omitempty"`
-	PrevPageToken         string           `json:"prevPageToken,omitempty"`
-	PollingIntervalMillis int64            `json:"pollingIntervalMillis,omitempty"`
-	OfflineAt             string           `json:"offlineAt,omitempty"`
-	PageInfo              map[string]any   `json:"pageInfo,omitempty"`
-	Kind                  string           `json:"kind,omitempty"`
-	ETag                  string           `json:"etag,omitempty"`
+	Items         []map[string]any `json:"items"`
+	NextPageToken string           `json:"nextPageToken,omitempty"`
+	PrevPageToken string           `json:"prevPageToken,omitempty"`
+	PageInfo      map[string]any   `json:"pageInfo,omitempty"`
+	Kind          string           `json:"kind,omitempty"`
+	ETag          string           `json:"etag,omitempty"`
 }
 
 type APIError struct {

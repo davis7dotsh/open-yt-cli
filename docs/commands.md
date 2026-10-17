@@ -264,8 +264,9 @@ oytc video trainability dQw4w9WgXcQ --format json
 
 - `get` / `stats` batch up to 50 IDs per request. `stats` defaults to the `statistics` part.
 - `popular` lists the `mostPopular` chart for a region (default `US`), optionally by category.
-- `trainability` calls the public `videoTrainability.get` endpoint **without any key** and
-  consumes no Data API quota.
+- `trainability` calls the public `videoTrainability.get` endpoint, which needs no key and
+  consumes no Data API quota. It sends no credentials unless an API key is configured (for
+  key-gated fakes such as yt-mirror).
 - Owner-only parts (`fileDetails`, `processingDetails`, `suggestions`) are rejected locally.
 
 ## Playlists
@@ -457,6 +458,13 @@ API-key precedence (highest first):
 `OYTC_OAUTH_CLIENT_ID` and `OYTC_OAUTH_CLIENT_SECRET` independently override stored client
 credentials only when bootstrapping `login --oauth`; authorized tokens are always read from
 `auth.json`. API-key and OAuth sections coexist and updates to one preserve the other.
+
+`YOUTUBE_API_BASE_URL` replaces every Google endpoint with one origin, keeping Google's
+paths (`/youtube/v3`, `/v2`, `/o/oauth2/v2/auth`, `/token`, `/revoke`), for a fake API such
+as yt-mirror. Credentials for it live in `auth.<host>.json` beside `auth.json`, and `status`
+reports the endpoint. Against a custom endpoint, `login --oauth` requests the authorization
+URL itself, so a server that redirects straight back completes without a browser. See
+[Dev against a fake API](../README.md#dev-against-a-fake-api-yt-mirror).
 
 On POSIX systems the config directory is created `0700` and the file `0600` where the
 filesystem permits. Keys use `X-Goog-Api-Key`; OAuth uses `Authorization: Bearer`. Neither

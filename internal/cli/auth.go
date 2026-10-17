@@ -430,6 +430,10 @@ func oauthStatus(credentials *config.OAuthCredentials) map[string]any {
 
 func oauthAuthHint(err error) error {
 	var apiErr *youtube.APIError
+	if strings.Contains(err.Error(), "re-run 'oytc login --oauth'") {
+		// The token source already explained the fix.
+		return err
+	}
 	if strings.Contains(strings.ToLower(err.Error()), "invalid_grant") {
 		return fmt.Errorf("OAuth authorization failed; re-run 'oytc login --oauth': %w", err)
 	}

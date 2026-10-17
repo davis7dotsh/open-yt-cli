@@ -118,3 +118,10 @@ func TestCustomEndpointLoginStatusAndReadsUseOneOrigin(t *testing.T) {
 		t.Fatalf("paths = %q, want %q", got, want)
 	}
 }
+
+func TestOAuthAuthHintDoesNotRepeatItself(t *testing.T) {
+	err := errors.New("OAuth authorization is expired or revoked; re-run 'oytc login --oauth': OAuth error (invalid_grant)")
+	if got := oauthAuthHint(err); got != err {
+		t.Fatalf("hint = %v", got)
+	}
+}

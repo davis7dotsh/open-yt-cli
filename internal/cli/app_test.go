@@ -452,7 +452,7 @@ func TestValidateRequestedItemsHandlesDuplicatesAcrossBatches(t *testing.T) {
 	}
 }
 
-func TestVideoTrainabilityRequiresNoKeyAndSendsNone(t *testing.T) {
+func TestVideoTrainabilityWithoutKeySendsNone(t *testing.T) {
 	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
 	t.Setenv("OYTC_API_KEY", "")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -471,6 +471,24 @@ func TestVideoTrainabilityRequiresNoKeyAndSendsNone(t *testing.T) {
 	}
 	if !bytes.Contains(out.Bytes(), []byte(`"videoId": "video123"`)) {
 		t.Fatalf("unexpected output: %s", out.String())
+	}
+}
+
+func TestVideoTrainabilitySendsConfiguredKey(t *testing.T) {
+	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
+	t.Setenv("OYTC_API_KEY", "env-key")
+	var sent string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sent = r.Header.Get("X-Goog-Api-Key")
+		_, _ = w.Write([]byte(`{"kind":"youtube#videoTrainability","videoId":"video123","permitted":["none"]}`))
+	}))
+	defer server.Close()
+	app, _, _ := testApp(server)
+	if err := execute(t, app, "video", "trainability", "video123"); err != nil {
+		t.Fatal(err)
+	}
+	if sent != "env-key" {
+		t.Fatalf("X-Goog-Api-Key = %q", sent)
 	}
 }
 

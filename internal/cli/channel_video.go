@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"open-yt-cli/internal/config"
 	"open-yt-cli/internal/output"
 	"open-yt-cli/internal/youtube"
 )
@@ -263,9 +264,13 @@ func (a *App) videoTrainabilityCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "trainability <VIDEO_ID>", Short: "Get third-party AI trainability (no key or quota required)", Args: exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client := a.client("")
+			// Google serves this anonymously, but a configured key is still sent:
+			// key-gated fakes such as yt-mirror reject anonymous callers. An
+			// unreadable auth.json must not block a call that needs no key.
+			credentials, _ := config.Load()
+			client := a.client(credentials.Key)
 			var result map[string]any
-			if err := client.GetJSON(cmd.Context(), "videoTrainability", url.Values{"id": {args[0]}}, false, &result); err != nil {
+			if err := client.GetJSON(cmd.Context(), "videoTrainability", url.Values{"id": {args[0]}}, credentials.Key != "", &result); err != nil {
 				return err
 			}
 			columns := a.columns

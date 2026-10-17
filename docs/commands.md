@@ -264,8 +264,9 @@ oytc video trainability dQw4w9WgXcQ --format json
 
 - `get` / `stats` batch up to 50 IDs per request. `stats` defaults to the `statistics` part.
 - `popular` lists the `mostPopular` chart for a region (default `US`), optionally by category.
-- `trainability` calls the public `videoTrainability.get` endpoint **without any key** and
-  consumes no Data API quota.
+- `trainability` calls the public `videoTrainability.get` endpoint, which needs no key and
+  consumes no Data API quota. It sends no credentials unless an API key is configured (for
+  key-gated fakes such as yt-mirror).
 - Owner-only parts (`fileDetails`, `processingDetails`, `suggestions`) are rejected locally.
 
 ## Playlists

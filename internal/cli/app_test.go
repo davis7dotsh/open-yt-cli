@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"open-yt-cli/internal/config"
 	"open-yt-cli/internal/youtube"
@@ -501,63 +500,6 @@ func TestChannelUploadsResolvesPlaylistAndListsItems(t *testing.T) {
 	}
 	if !bytes.Contains(out.Bytes(), []byte(`"videoId": "v1"`)) {
 		t.Fatalf("unexpected output: %s", out.String())
-	}
-}
-
-func TestLiveChatStreamPollsWithTokenAndDeduplicates(t *testing.T) {
-	t.Setenv("OYTC_CONFIG_DIR", t.TempDir())
-	t.Setenv("OYTC_API_KEY", "key")
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		request := requests.Add(1)
-		if request == 1 {
-			_, _ = w.Write([]byte(`{"items":[{"id":"a","snippet":{"displayMessage":"first"}}],"nextPageToken":"resume","pollingIntervalMillis":1}`))
-			return
-		}
-		if r.URL.Query().Get("pageToken") != "resume" {
-			t.Errorf("page token = %q", r.URL.Query().Get("pageToken"))
-		}
-		_, _ = w.Write([]byte(`{"items":[{"id":"a"},{"id":"b","snippet":{"displayMessage":"second"}}],"nextPageToken":"done","offlineAt":"2025-01-01T00:00:00Z"}`))
-	}))
-	defer server.Close()
-	app, out, _ := testApp(server)
-	if err := execute(t, app, "live-chat", "stream", "--chat-id", "chat", "--format", "jsonl", "--page-size", "200"); err != nil {
-		t.Fatal(err)
-	}
-	if requests.Load() != 2 {
-		t.Fatalf("requests = %d", requests.Load())
-	}
-	lines := bytes.Split(bytes.TrimSpace(out.Bytes()), []byte("\n"))
-	if len(lines) != 2 || bytes.Count(out.Bytes(), []byte(`"id":"a"`)) != 1 || bytes.Count(out.Bytes(), []byte(`"id":"b"`)) != 1 {
-		t.Fatalf("unexpected stream: %s", out.String())
-	}
-}
-
-func TestRecentIDsEvictsOldEntries(t *testing.T) {
-	seen := newRecentIDs(2)
-	if !seen.Add("a") || !seen.Add("b") || seen.Add("a") {
-		t.Fatal("recent ID set did not detect a duplicate")
-	}
-	if !seen.Add("c") {
-		t.Fatal("recent ID set rejected a new ID")
-	}
-	if len(seen.values) != 2 {
-		t.Fatalf("stored IDs = %d, want 2", len(seen.values))
-	}
-	if !seen.Add("a") {
-		t.Fatal("oldest ID was not evicted")
-	}
-}
-
-func TestLiveChatPollingIntervalIsBounded(t *testing.T) {
-	if got := liveChatPollingInterval(0); got != time.Second {
-		t.Fatalf("zero interval = %v", got)
-	}
-	if got := liveChatPollingInterval(2500); got != 2500*time.Millisecond {
-		t.Fatalf("normal interval = %v", got)
-	}
-	if got := liveChatPollingInterval(999999999); got != maxLiveChatPollingInterval {
-		t.Fatalf("large interval = %v, want %v", got, maxLiveChatPollingInterval)
 	}
 }
 

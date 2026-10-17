@@ -18,7 +18,6 @@ Help output is always authoritative: run `oytc --help`, `oytc <command> --help`,
 - [Playlists](#playlists)
 - [Comments](#comments)
 - [Subscriptions](#subscriptions)
-- [Live chat](#live-chat)
 - [Metadata lists](#metadata-lists)
 - [Agent skill installation](#agent-skill-installation)
 - [Version and self-update](#version-and-self-update)
@@ -66,9 +65,6 @@ oytc comment threads --id <THREAD_IDS>
 
 oytc subscription list --channel <CHANNEL_ID>
 oytc subscription list --id <SUBSCRIPTION_IDS>
-
-oytc live-chat list (--video <VIDEO_ID> | --chat-id <LIVE_CHAT_ID>)
-oytc live-chat stream (--video <VIDEO_ID> | --chat-id <LIVE_CHAT_ID>)
 
 oytc category list (--region <REGION> | --id <CATEGORY_IDS>)
 oytc language list
@@ -306,33 +302,6 @@ Lists a channel's **public** subscriptions (many channels hide these; a hidden l
 an API error). Requires exactly one of `--channel` or `--id`. The owner-only
 `subscriberSnippet` part is rejected locally.
 
-## Live chat
-
-Given `--video`, `oytc` resolves the video's `liveStreamingDetails.activeLiveChatId`
-(one extra request); `--chat-id` skips that lookup.
-
-```sh
-oytc live-chat list --video LIVE_VIDEO_ID
-oytc live-chat stream --video LIVE_VIDEO_ID --format jsonl
-oytc live-chat stream --chat-id CHAT_ID --limit 500
-```
-
-- `list` fetches exactly one finite page. `--all` is rejected there because a live-chat
-  next token represents *future polling*, not a static collection. If `--limit` discards
-  messages from that page, the CLI omits the unsafe next token rather than suggesting a
-  resume point that would skip those messages.
-- `stream` continuously polls `liveChatMessages.list`. It is explicitly a **REST polling
-  fallback**, not Google's lower-latency gRPC `streamList` method. It:
-  - carries the returned page token forward;
-  - waits at least `pollingIntervalMillis` between calls;
-  - emits JSONL by default (TSV/table also available; `--format json` is rejected for an
-    unbounded stream);
-  - suppresses unchanged messages by ID while emitting gift combo-count updates;
-  - supports `--page-token` for external resumption and `--limit` for bounded runs;
-  - stops when the chat goes offline and exits cleanly on interruption.
-- `--page-size` (200–2000, default 500) and `--profile-image-size` (16–720) are validated
-  locally.
-
 ## Metadata lists
 
 ```sh
@@ -414,9 +383,9 @@ Finite JSON output uses a stable envelope:
 - YouTube counters (view counts etc.) are JSON strings in the API and are preserved as
   strings, avoiding integer precision loss.
 - Human table output prints an item/request summary on stderr unless `--quiet` is used.
-- The CLI retains the API metadata it needs for pagination and live-chat polling even
-  when `--fields` selects only item fields. This lets `--all` and `live-chat stream`
-  continue without requiring callers to list cursor or polling fields themselves.
+- The CLI retains the API metadata it needs for pagination even when `--fields` selects
+  only item fields. This lets `--all` continue without requiring callers to list cursor
+  fields themselves.
 
 ## Pagination and quota
 
@@ -485,8 +454,7 @@ reason without exposing the key.
 - OAuth is limited to read-only YouTube and Analytics scopes for the authorized channel.
   Revenue/content-owner reports, uploads, moderation, and all mutations remain absent.
 - `/c/` custom channel URLs require a search and can resolve to the API's best match.
-- Live chat uses REST polling rather than the lower-latency official gRPC stream.
 - `--fields` selects resource fields; the CLI also requests the metadata needed to
-  paginate or poll safely.
+  paginate safely.
 - Table defaults are intentionally compact; use JSON or custom `--columns` for full
   resources.

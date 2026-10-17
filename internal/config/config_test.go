@@ -312,3 +312,24 @@ func mustStat(t *testing.T, path string) os.FileInfo {
 	}
 	return info
 }
+
+func TestCustomEndpointCredentialsLiveApartFromGoogle(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OYTC_CONFIG_DIR", dir)
+	for env, name := range map[string]string{
+		"":                               "auth.json",
+		"https://yt-mirror.example.com/": "auth.yt-mirror.example.com.json",
+		"http://Europa.ts.net:8080":      "auth.europa.ts.net_8080.json",
+		"http://[::1]:8080":              "auth.___1__8080.json",
+	} {
+		t.Setenv("YOUTUBE_API_BASE_URL", env)
+		path, err := Path()
+		if err != nil || path != filepath.Join(dir, name) {
+			t.Fatalf("%q: path = %q, %v; want %s", env, path, err, name)
+		}
+	}
+	t.Setenv("YOUTUBE_API_BASE_URL", "not a url")
+	if _, err := Path(); err == nil {
+		t.Fatal("invalid YOUTUBE_API_BASE_URL was accepted")
+	}
+}

@@ -152,3 +152,30 @@ CI, releases, and the website deploy run on [Depot CI](https://depot.dev/docs/ci
 (GitHub Actions-compatible workflows in `.depot/workflows/`, executed entirely on Depot
 compute — not GitHub Actions and not Depot's GitHub Actions runners); see
 [docs/releasing.md](docs/releasing.md).
+
+## Dev against a fake API (yt-mirror)
+
+`YOUTUBE_API_BASE_URL` points every endpoint at one origin with Google's paths kept:
+Data API at `$BASE/youtube/v3`, Analytics at `$BASE/v2`, OAuth at `$BASE/o/oauth2/v2/auth`,
+`$BASE/token`, and `$BASE/revoke`. That's the layout of yt-mirror, a seeded fake of the
+YouTube APIs, so `oytc` runs entirely against it. Unset, nothing changes.
+
+```sh
+export YOUTUBE_API_BASE_URL=https://your-mirror.example.com
+OYTC_OAUTH_CLIENT_ID=anything OYTC_OAUTH_CLIENT_SECRET="$MIRROR_KEY" oytc login --oauth
+oytc status --check
+oytc channel get @MirrorDevelopers
+oytc analytics overview --by day
+```
+
+- The mirror has no consent screen, so `login --oauth` follows the authorization URL itself
+  and finishes without a browser (headless boxes and agents included). Any client ID works;
+  a key-gated mirror wants its key as the client secret.
+- The grant includes `youtube.readonly`, so public-data commands work through it too.
+  `oytc login` with the mirror key needs the mirror to accept the `X-Goog-Api-Key` header,
+  which `oytc` sends instead of `key=`.
+- Credentials for a custom endpoint are stored apart from Google's, in
+  `auth.<host>.json` next to `auth.json`, so real keys and tokens never go to the mirror.
+  `status` shows the active endpoint.
+- Everything is fake and deterministic: channels, videos, comments, analytics. Seeded IDs
+  and handles are at `$BASE/__mirror/seed` (send the key as `Authorization: Bearer`).

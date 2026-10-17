@@ -458,6 +458,13 @@ API-key precedence (highest first):
 credentials only when bootstrapping `login --oauth`; authorized tokens are always read from
 `auth.json`. API-key and OAuth sections coexist and updates to one preserve the other.
 
+`YOUTUBE_API_BASE_URL` replaces every Google endpoint with one origin, keeping Google's
+paths (`/youtube/v3`, `/v2`, `/o/oauth2/v2/auth`, `/token`, `/revoke`), for a fake API such
+as yt-mirror. Credentials for it live in `auth.<host>.json` beside `auth.json`, and `status`
+reports the endpoint. Against a custom endpoint, `login --oauth` requests the authorization
+URL itself, so a server that redirects straight back completes without a browser. See
+[Dev against a fake API](../README.md#dev-against-a-fake-api-yt-mirror).
+
 On POSIX systems the config directory is created `0700` and the file `0600` where the
 filesystem permits. Keys use `X-Goog-Api-Key`; OAuth uses `Authorization: Bearer`. Neither
 secret is placed in request URLs.

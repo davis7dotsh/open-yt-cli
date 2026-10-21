@@ -99,7 +99,7 @@ func exitCode(err error) int {
 	if strings.Contains(message, "unknown command") || strings.Contains(message, "unknown flag") {
 		return 2
 	}
-	if strings.Contains(message, "not found") || strings.Contains(message, "no active public live chat") || strings.Contains(message, "no public uploads") {
+	if strings.Contains(message, "not found") || strings.Contains(message, "no public uploads") {
 		return 4
 	}
 	if errors.Is(err, context.Canceled) {

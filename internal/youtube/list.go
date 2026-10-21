@@ -26,10 +26,9 @@ type ListResult struct {
 }
 
 // MaxListRequests bounds the `--all` pagination loop. It is deliberately far
-// above any real result set: at the largest page size any endpoint accepts
-// (2000, live chat) it allows 20,000,000 items, and every other endpoint caps
-// at 50 or 100 per page. A legitimate `--all` cannot reach it, so hitting it
-// means the server is not terminating.
+// above any real result set: endpoints cap at 50 or 100 per page, so it
+// allows up to 1,000,000 items. A legitimate `--all` cannot reach it, so
+// hitting it means the server is not terminating.
 const MaxListRequests = 10000
 
 func (c *Client) List(ctx context.Context, resource string, params url.Values, options PageOptions) (ListResult, error) {

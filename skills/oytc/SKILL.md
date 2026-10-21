@@ -1,6 +1,6 @@
 ---
 name: oytc
-description: Query public YouTube data and an authorized channel's read-only analytics via the oytc CLI. Use for video/channel stats, searches, uploads, comments, live chat, watch time, traffic sources, and demographics.
+description: Query public YouTube data and an authorized channel's read-only analytics via the oytc CLI. Use for video/channel stats, searches, uploads, comments, watch time, traffic sources, and demographics.
 ---
 
 # oytc — read-only YouTube data and analytics CLI
@@ -29,7 +29,6 @@ oytc video get VIDEO_ID --format json
 oytc video stats VIDEO_ID_1 VIDEO_ID_2 --format json   # counters are JSON strings
 oytc playlist items PLAYLIST_ID --all --format jsonl
 oytc comment threads --video VIDEO_ID --order relevance --format jsonl
-oytc live-chat stream --video LIVE_VIDEO_ID --limit 100   # JSONL; REST polling fallback
 
 # OAuth-only owner analytics
 oytc analytics overview --by day --format json

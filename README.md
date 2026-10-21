@@ -36,7 +36,7 @@ try {
 
 Alternatively, download a zip from [releases](https://github.com/davis7dotsh/open-yt-cli/releases).
 
-From source (Go 1.26.6+): `go install ./cmd/oytc` from a clone, or `make build`.
+From source (Go 1.26.10+): `go install ./cmd/oytc` from a clone, or `make build`.
 
 ## Quick start
 
@@ -67,7 +67,6 @@ table|json|jsonl|tsv` and `--columns` cover the rest.
 | `playlist` | Playlists and playlist items |
 | `comment` | Comments, replies, and comment threads |
 | `subscription` | Public channel subscriptions |
-| `live-chat` | Live chat, one page or continuous (REST polling fallback) |
 | `category` / `language` / `region` | YouTube metadata lists |
 | `analytics` | OAuth-only reports, overview, video, traffic-source, and demographic analytics |
 | `login` / `status` / `logout` | Manage API-key and read-only OAuth credentials |
@@ -125,8 +124,7 @@ the Analytics API — those remain YouTube Studio-only.)
 
 There are still zero writes: uploads, edits, moderation, and mutations are out of scope.
 Revenue scopes/metrics, content-owner reports, and arbitrary private-account operations are
-not requested or supported. Live chat streaming uses documented REST polling, not the
-official gRPC stream.
+not requested or supported.
 
 ## Documentation
 

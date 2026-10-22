@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,6 +19,7 @@ const (
 	envKey               = "OYTC_API_KEY"
 	envOAuthClientID     = "OYTC_OAUTH_CLIENT_ID"
 	envOAuthClientSecret = "OYTC_OAUTH_CLIENT_SECRET"
+	EnvAPIBaseURL        = "YOUTUBE_API_BASE_URL"
 	maxCredentialBytes   = 1 << 20
 )
 
@@ -87,7 +89,37 @@ func Path() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "auth.json"), nil
+	base, err := APIBaseURL()
+	if err != nil {
+		return "", err
+	}
+	if base == "" {
+		return filepath.Join(dir, "auth.json"), nil
+	}
+	// Credentials for a custom endpoint live apart from Google's, so neither
+	// set is ever sent to the other's host.
+	parsed, _ := url.Parse(base)
+	host := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '-' {
+			return r
+		}
+		return '_'
+	}, strings.ToLower(parsed.Host))
+	return filepath.Join(dir, "auth."+host+".json"), nil
+}
+
+// APIBaseURL returns the YOUTUBE_API_BASE_URL origin that replaces every
+// Google endpoint (such as a yt-mirror fake API), or "" for Google itself.
+func APIBaseURL() (string, error) {
+	base := strings.TrimRight(strings.TrimSpace(os.Getenv(EnvAPIBaseURL)), "/")
+	if base == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(base)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("%s must be an absolute http(s) URL such as https://yt-mirror.example.com", EnvAPIBaseURL)
+	}
+	return base, nil
 }
 
 func Load() (Credentials, error) {

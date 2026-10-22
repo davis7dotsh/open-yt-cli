@@ -280,7 +280,7 @@ func (a *App) regionCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			params := url.Values{"part": {partsOr(api.parts, "snippet")}}
 			setValues(params, map[string]string{"hl": api.hl, "fields": api.fields})
-			return a.runList(cmd, "i18nRegions", params, listFlags{}, []string{"id", "snippet.name", "snippet.glName"})
+			return a.runList(cmd, "i18nRegions", params, listFlags{}, []string{"id", "snippet.name"})
 		},
 	}
 	addAPIFlags(list, &api, true)

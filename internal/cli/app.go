@@ -48,6 +48,10 @@ type App struct {
 	UpdaterFactory func(*update.Updater) *update.Updater
 	// SkillInstallPath overrides ~/.agents/skills/oytc in tests.
 	SkillInstallPath string
+	// CustomEndpoint is the YOUTUBE_API_BASE_URL origin that BaseURL,
+	// AnalyticsBaseURL, and the OAuth URLs derive from; empty means Google.
+	CustomEndpoint string
+	endpointErr    error
 
 	format   string
 	columns  []string
@@ -74,7 +78,24 @@ func New() *App {
 	app := &App{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, BaseURL: youtube.DefaultBaseURL, timeout: 20 * time.Second, Now: time.Now}
 	app.IsOutputTTY = term.IsTerminal(int(os.Stdout.Fd()))
 	app.ReadSecret = app.readSecret
+	app.endpointErr = app.useCustomEndpoint()
 	return app
+}
+
+// useCustomEndpoint points every API and OAuth endpoint at YOUTUBE_API_BASE_URL,
+// keeping Google's paths. Unset leaves each package's Google default in place.
+func (a *App) useCustomEndpoint() error {
+	base, err := config.APIBaseURL()
+	if err != nil || base == "" {
+		return err
+	}
+	a.CustomEndpoint = base
+	a.BaseURL = base + "/youtube/v3"
+	a.AnalyticsBaseURL = base + "/v2"
+	a.OAuthAuthURL = base + "/o/oauth2/v2/auth"
+	a.OAuthTokenURL = base + "/token"
+	a.OAuthRevokeURL = base + "/revoke"
+	return nil
 }
 
 func (a *App) Root() *cobra.Command {
@@ -101,6 +122,9 @@ func (a *App) Root() *cobra.Command {
 	root.PersistentFlags().DurationVar(&a.timeout, "timeout", 20*time.Second, "per-request timeout")
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return &UsageError{Message: err.Error()} })
 	root.PersistentPreRunE = func(_ *cobra.Command, _ []string) error {
+		if a.endpointErr != nil {
+			return &UsageError{Message: a.endpointErr.Error()}
+		}
 		format := a.outputFormat()
 		if format != "table" && format != "json" && format != "jsonl" && format != "tsv" {
 			return &UsageError{Message: fmt.Sprintf("unsupported format %q (use table, json, jsonl, or tsv)", format)}

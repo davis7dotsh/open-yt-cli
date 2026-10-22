@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -71,7 +72,11 @@ func (a *App) authenticationCommands() []*cobra.Command {
 }
 
 func (a *App) loginAPIKey(cmd *cobra.Command) error {
-	fmt.Fprintf(a.Err, "API key setup: %s\n", apiKeySetupURL)
+	if a.CustomEndpoint != "" {
+		fmt.Fprintf(a.Err, "API endpoint: %s (%s)\n", a.CustomEndpoint, config.EnvAPIBaseURL)
+	} else {
+		fmt.Fprintf(a.Err, "API key setup: %s\n", apiKeySetupURL)
+	}
 	fmt.Fprint(a.Err, "YouTube Data API key: ")
 	key, err := a.ReadSecret()
 	fmt.Fprintln(a.Err)
@@ -103,7 +108,9 @@ func (a *App) loginAPIKey(cmd *cobra.Command) error {
 func (a *App) loginOAuth(cmd *cobra.Command) error {
 	clientID, clientSecret := config.OAuthBootstrap()
 	var err error
-	if clientID == "" || clientSecret == "" {
+	if a.CustomEndpoint != "" {
+		fmt.Fprintf(a.Err, "OAuth endpoint: %s (%s)\n", a.CustomEndpoint, config.EnvAPIBaseURL)
+	} else if clientID == "" || clientSecret == "" {
 		fmt.Fprintf(a.Err, "Desktop OAuth client setup: %s\n", oauthSetupURL)
 	}
 	if clientID == "" {
@@ -185,6 +192,9 @@ func (a *App) runStatus(cmd *cobra.Command, check bool) error {
 	if keyConfigured {
 		state["api_key"].(map[string]any)["fingerprint"] = config.Fingerprint(credentials.Key)
 	}
+	if a.CustomEndpoint != "" {
+		state["endpoint"] = a.CustomEndpoint
+	}
 	missingCredentials := check && !keyConfigured && !oauthConfigured
 	// Validate every configured credential before failing, so a stale API
 	// key cannot mask a working OAuth authorization (or vice versa).
@@ -207,6 +217,9 @@ func (a *App) runStatus(cmd *cobra.Command, check bool) error {
 			if check {
 				columns = []string{"path", "api_key.configured", "api_key.source", "api_key.fingerprint", "api_key.valid", "oauth.configured", "oauth.client_id", "oauth.scopes", "oauth.expiry", "oauth.valid"}
 			}
+			if a.CustomEndpoint != "" {
+				columns = append([]string{"endpoint"}, columns...)
+			}
 		}
 		if err := output.RenderObject(a.Out, state, a.outputFormat(), columns, a.noHeader); err != nil {
 			return err
@@ -215,6 +228,9 @@ func (a *App) runStatus(cmd *cobra.Command, check bool) error {
 			return youtube.ErrMissingKey
 		}
 		return statusCheckError(keyErr, oauthErr)
+	}
+	if a.CustomEndpoint != "" {
+		fmt.Fprintf(a.Out, "Endpoint: %s (%s)\n", a.CustomEndpoint, config.EnvAPIBaseURL)
 	}
 	fmt.Fprintf(a.Out, "Path: %s\nAPI key configured: %t\nAPI key source: %s\n", credentials.Path, keyConfigured, valueOr(credentials.Source, "none"))
 	if keyConfigured {
@@ -311,6 +327,10 @@ func (a *App) runLogout(ctx context.Context) error {
 }
 
 func (a *App) oauthConfig(clientID, clientSecret string) oauth.Config {
+	openBrowser := a.OpenBrowser
+	if openBrowser == nil && a.CustomEndpoint != "" {
+		openBrowser = a.followConsent
+	}
 	return oauth.Config{
 		ClientID:         clientID,
 		ClientSecret:     clientSecret,
@@ -319,11 +339,37 @@ func (a *App) oauthConfig(clientID, clientSecret string) oauth.Config {
 		TokenURL:         a.OAuthTokenURL,
 		RevokeURL:        a.OAuthRevokeURL,
 		HTTPClient:       a.HTTPClient,
-		OpenBrowser:      a.OpenBrowser,
+		OpenBrowser:      openBrowser,
 		Out:              a.Err,
 		Timeout:          3 * time.Minute,
 		Now:              a.Now,
 	}
+}
+
+// followConsent requests the consent URL itself. yt-mirror has no consent
+// screen and redirects straight to the loopback callback, so login completes
+// without a browser; any other response falls back to opening one.
+func (a *App) followConsent(target string) error {
+	client := a.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: a.timeout}
+	}
+	consent, err := url.Parse(target)
+	if err != nil {
+		return err
+	}
+	callback, err := url.Parse(consent.Query().Get("redirect_uri"))
+	if err != nil {
+		return err
+	}
+	resp, err := client.Get(target)
+	if err == nil {
+		resp.Body.Close()
+		if resp.Request.URL.Host == callback.Host {
+			return nil
+		}
+	}
+	return oauth.OpenBrowser(target)
 }
 
 func (a *App) oauthTokenSource(credentials *config.OAuthCredentials) (*oauth.TokenSource, error) {
@@ -384,6 +430,10 @@ func oauthStatus(credentials *config.OAuthCredentials) map[string]any {
 
 func oauthAuthHint(err error) error {
 	var apiErr *youtube.APIError
+	if strings.Contains(err.Error(), "re-run 'oytc login --oauth'") {
+		// The token source already explained the fix.
+		return err
+	}
 	if strings.Contains(strings.ToLower(err.Error()), "invalid_grant") {
 		return fmt.Errorf("OAuth authorization failed; re-run 'oytc login --oauth': %w", err)
 	}
